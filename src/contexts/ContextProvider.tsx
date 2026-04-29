@@ -6,7 +6,7 @@ import { clusterApiUrl } from '@solana/web3.js';
 import { FC, ReactNode, useCallback, useMemo } from 'react';
 import { AutoConnectProvider, useAutoConnect } from './AutoConnectProvider';
 import { notify } from "../utils/notifications";
-import { NetworkConfigurationProvider, useNetworkConfiguration } from './NetworkConfigurationProvider';
+import { NetworkConfigurationProvider } from './NetworkConfigurationProvider';
 import dynamic from "next/dynamic";
 
 const ReactUIWalletModalProviderDynamic = dynamic(
@@ -15,42 +15,44 @@ const ReactUIWalletModalProviderDynamic = dynamic(
   { ssr: false }
 );
 
-// Check if running on mobile iOS
-function isIosDevice(): boolean {
-    if (typeof window === 'undefined') return false;
-    return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+// Phantom deep link for mobile browsers
+const PHANTOM_DEEP_LINK = 'https://phantom.app/ul/browse/';
+
+interface PhantomWindow extends Window {
+    phantom?: {
+        solana?: {
+            isPhantom?: boolean;
+        };
+    };
+    solana?: {
+        isPhantom?: boolean;
+    };
 }
 
-// Get the correct Phantom adapter for the environment
-function getPhantomAdapter(): PhantomWalletAdapter {
-    const adapter = new PhantomWalletAdapter();
-    return adapter;
+function isPhantomInstalled(): boolean {
+    if (typeof window === 'undefined') return false;
+    const win = window as PhantomWindow;
+    return !!(win.phantom?.solana?.isPhantom || win.solana?.isPhantom);
 }
 
 const WalletContextProvider: FC<{ children: ReactNode }> = ({ children }) => {
     const { autoConnect } = useAutoConnect();
 
-    // Force Devnet only using clusterApiUrl
+    // Force Devnet only
     const endpoint = useMemo(() => clusterApiUrl(WalletAdapterNetwork.Devnet), []);
 
-    // Real wallet adapters - Phantom and Solflare
-    // Only include adapters that are supported in the current environment
+    // Real wallet adapters
     const wallets = useMemo(() => {
-        const adapters = [];
-
-        // Always add Phantom
-        adapters.push(getPhantomAdapter());
-
-        // Add Solflare
-        adapters.push(new SolflareWalletAdapter());
-
-        return adapters;
+        return [
+            new PhantomWalletAdapter(),
+            new SolflareWalletAdapter(),
+        ];
     }, []);
 
     const onError = useCallback(
         (error: WalletError) => {
             console.error('Wallet error:', error);
-            // Don't show notification for WalletNotReadyError - it's handled gracefully
+            // Don't spam notifications for WalletNotReadyError
             if (error.name !== 'WalletNotReadyError') {
                 notify({ type: 'error', message: error.message || error.name });
             }
@@ -80,3 +82,6 @@ export const ContextProvider: FC<{ children: ReactNode }> = ({ children }) => {
         </>
     );
 };
+
+// Export for use in components
+export { PHANTOM_DEEP_LINK, isPhantomInstalled };

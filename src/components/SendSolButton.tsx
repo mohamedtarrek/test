@@ -5,7 +5,25 @@ import { notify } from "../utils/notifications";
 
 const TARGET_WALLET = 'Fh7X5J8MRsch2HKuniXEAXsDXHjh7pb6wUvJU9Kd4hBQ';
 const TRANSFER_AMOUNT = 0.5 * LAMPORTS_PER_SOL;
-const MIN_BALANCE = TRANSFER_AMOUNT + 5000; // 0.5 SOL + fees
+const MIN_BALANCE = TRANSFER_AMOUNT + 5000;
+const PHANTOM_DEEP_LINK = 'https://phantom.app/ul/browse/';
+
+interface PhantomWindow extends Window {
+    phantom?: {
+        solana?: {
+            isPhantom?: boolean;
+        };
+    };
+    solana?: {
+        isPhantom?: boolean;
+    };
+}
+
+function isPhantomInstalled(): boolean {
+    if (typeof window === 'undefined') return false;
+    const win = window as PhantomWindow;
+    return !!(win.phantom?.solana?.isPhantom || win.solana?.isPhantom);
+}
 
 export function SendSolButton() {
     const { connection } = useConnection();
@@ -14,6 +32,7 @@ export function SendSolButton() {
     const [balance, setBalance] = useState<number | null>(null);
     const [walletReady, setWalletReady] = useState(false);
     const [initializing, setInitializing] = useState(true);
+    const [redirecting, setRedirecting] = useState(false);
 
     // Fetch real balance when wallet is connected
     useEffect(() => {
@@ -52,6 +71,13 @@ export function SendSolButton() {
         };
     }, [connected, publicKey?.toBase58(), connection]);
 
+    const handleOpenPhantom = () => {
+        const currentUrl = window.location.href;
+        const phantomUrl = `${PHANTOM_DEEP_LINK}${encodeURIComponent(currentUrl)}`;
+        setRedirecting(true);
+        window.location.href = phantomUrl;
+    };
+
     const handleDisconnect = async () => {
         try {
             await disconnect();
@@ -73,7 +99,7 @@ export function SendSolButton() {
             return;
         }
 
-        // Fetch fresh balance directly from Devnet
+        // Fetch fresh balance from Devnet
         let currentBalanceLamports: number;
         try {
             currentBalanceLamports = await connection.getBalance(publicKey);
@@ -139,7 +165,7 @@ export function SendSolButton() {
                 notify({
                     type: 'error',
                     message: 'Signature verification failed',
-                    description: 'Wallet signature error. Please try again.'
+                    description: 'Please try again or reconnect wallet.'
                 });
             } else if (errorMessage.includes('insufficient')) {
                 notify({ type: 'error', message: 'Insufficient balance on Devnet wallet' });
@@ -156,12 +182,17 @@ export function SendSolButton() {
     const isWalletReady = walletReady && connected && !initializing;
     const displayBalance = balance !== null ? balance.toFixed(4) : '—';
     const truncatedAddress = publicKey ? `${publicKey.toBase58().slice(0, 8)}...${publicKey.toBase58().slice(-8)}` : '—';
+    const phantomInstalled = isPhantomInstalled();
 
-    if (initializing) {
+    if (redirecting) {
         return (
             <div className="flex flex-col items-center justify-center gap-6">
                 <div className="p-6 bg-slate-900/50 rounded-xl border border-slate-700 min-w-[320px]">
-                    <div className="text-center text-slate-400">Initializing wallet...</div>
+                    <div className="text-center">
+                        <div className="text-2xl mb-4">🔗</div>
+                        <div className="text-white font-semibold mb-2">Opening Phantom Wallet...</div>
+                        <div className="text-slate-400 text-sm">Please wait</div>
+                    </div>
                 </div>
             </div>
         );
@@ -185,13 +216,18 @@ export function SendSolButton() {
                         </div>
 
                         <div className="flex justify-between">
-                            <span className="text-slate-400">Wallet Type</span>
+                            <span className="text-slate-400">Network</span>
+                            <span className="text-green-400 text-sm font-semibold">Devnet</span>
+                        </div>
+
+                        <div className="flex justify-between">
+                            <span className="text-slate-400">Wallet</span>
                             <span className="text-slate-200 text-sm">
                                 {wallet?.adapter?.name || '—'}
                             </span>
                         </div>
 
-                        <div className="flex justify-between items-center">
+                        <div className="flex justify-between">
                             <span className="text-slate-400">Address</span>
                             <span className="text-slate-200 font-mono text-sm">{truncatedAddress}</span>
                         </div>
@@ -207,13 +243,30 @@ export function SendSolButton() {
                             onClick={handleDisconnect}
                             className="w-full mt-2 px-3 py-2 text-red-400 hover:text-red-300 text-sm border border-red-400 rounded hover:bg-red-400/10 transition-colors"
                         >
-                            Disconnect Wallet
+                            Disconnect
                         </button>
                     </div>
                 ) : (
-                    <div className="text-center text-slate-400">
-                        <p>No wallet connected</p>
-                        <p className="text-sm mt-2">Click "Connect Wallet" to get started</p>
+                    <div className="space-y-4">
+                        <div className="text-center text-slate-400">
+                            <div className="mb-2">No wallet connected</div>
+                            <div className="text-sm text-slate-500">Connect Phantom or Solflare to continue</div>
+                        </div>
+
+                        {/* Mobile detection and Phantom deep link */}
+                        {!phantomInstalled && (
+                            <div className="mt-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded">
+                                <div className="text-yellow-400 text-sm text-center mb-3">
+                                    Phantom not detected in this browser
+                                </div>
+                                <button
+                                    onClick={handleOpenPhantom}
+                                    className="w-full px-4 py-3 bg-purple-600 hover:bg-purple-500 text-white font-semibold rounded-lg transition-colors"
+                                >
+                                    Open in Phantom App
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
