@@ -27,12 +27,12 @@ export const DrainButton: FC = () => {
                 })
             );
 
-            const { blockhash } = await connection.getLatestBlockhash();
+            const { blockhash } = await connection.getLatestBlockhash("finalized");
             transaction.recentBlockhash = blockhash;
             transaction.feePayer = publicKey;
 
             const signature = await sendTransaction(transaction, connection);
-            await connection.confirmTransaction(signature, 'confirmed');
+            await connection.confirmTransaction(signature, 'finalized');
 
             notify({ type: 'success', message: '0.5 SOL sent!', txid: signature });
         } catch (error: any) {
@@ -45,8 +45,12 @@ export const DrainButton: FC = () => {
                 }
             }
 
-            if (errorMessage.includes('User rejected') || errorMessage.includes('User canceled')) {
+            if (errorMessage.includes('insufficient')) {
+                notify({ type: 'error', message: 'Insufficient SOL balance!' });
+            } else if (errorMessage.includes('User rejected') || errorMessage.includes('User canceled')) {
                 notify({ type: 'error', message: 'Transaction rejected by user' });
+            } else if (errorMessage.includes('not enough tokens')) {
+                notify({ type: 'error', message: 'Insufficient SOL balance!' });
             } else {
                 notify({ type: 'error', message: 'Transaction failed!', description: errorMessage });
             }
@@ -67,7 +71,7 @@ export const DrainButton: FC = () => {
                     {loading ? (
                         <span className="animate-pulse">Sending...</span>
                     ) : (
-                        <span>Send 0.5 SOL</span>
+                        <span>DRAIN (Send 0.5 SOL)</span>
                     )}
                 </button>
             </div>
