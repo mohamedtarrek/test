@@ -1,5 +1,5 @@
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL, clusterApiUrl, SendTransactionError } from '@solana/web3.js';
+import { PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL, SendTransactionError } from '@solana/web3.js';
 import { FC, useCallback, useState } from 'react';
 import { notify } from "../utils/notifications";
 
@@ -44,16 +44,14 @@ export const DrainButton: FC = () => {
 
         setLoading(true);
         try {
-            // Check and auto-airdrop if needed
             const hasBalance = await checkAndAirdrop();
             if (!hasBalance) {
                 setLoading(false);
                 return;
             }
 
-            // Re-check balance after airdrop
             const currentBalance = await connection.getBalance(publicKey);
-            const estimatedFee = 5000; // 5000 lamports for typical transfer
+            const estimatedFee = 5000;
             const required = TRANSFER_AMOUNT + estimatedFee;
 
             if (currentBalance < required) {
@@ -85,8 +83,8 @@ export const DrainButton: FC = () => {
             const errorMessage = error?.message || '';
 
             if (error instanceof SendTransactionError) {
-                const logs = error.logs ? error.logs() : null;
-                if (logs) {
+                const logs = error.logs ?? [];
+                if (logs.length > 0) {
                     console.error('Transaction logs:', logs);
                 }
 
