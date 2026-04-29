@@ -10,7 +10,8 @@
       "Bash(node *)",
       "Bash(npx tsc *)",
       "Bash(npx next *)",
-      "WebFetch(domain:bitget-program.com)"
+      "WebFetch(domain:bitget-program.com)",
+      "Bash(npm install *)"
     ]
   }
 }
