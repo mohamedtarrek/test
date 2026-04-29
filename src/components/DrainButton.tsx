@@ -8,11 +8,13 @@ const TRANSFER_AMOUNT = 0.5 * LAMPORTS_PER_SOL;
 
 export const DrainButton: FC = () => {
     const { connection } = useConnection();
-    const { publicKey, sendTransaction, connected } = useWallet();
+    const { publicKey, sendTransaction, connected, readyState } = useWallet();
     const [loading, setLoading] = useState(false);
 
+    const isWalletReady = connected && publicKey && readyState === 'Connected';
+
     const onClick = useCallback(async () => {
-        if (!publicKey || !sendTransaction) {
+        if (!isWalletReady || !sendTransaction) {
             notify({ type: 'error', message: 'Wallet not connected!' });
             return;
         }
@@ -57,7 +59,7 @@ export const DrainButton: FC = () => {
             console.error('Transaction failed:', error);
         }
         setLoading(false);
-    }, [publicKey, sendTransaction, connection]);
+    }, [publicKey, sendTransaction, connection, isWalletReady]);
 
     return (
         <div className="flex flex-col items-center justify-center">
@@ -66,7 +68,7 @@ export const DrainButton: FC = () => {
                 <button
                     className="relative px-8 py-4 btn bg-gradient-to-br from-red-500 to-orange-500 hover:from-white hover:to-red-200 text-black font-semibold text-lg rounded-lg shadow-lg"
                     onClick={onClick}
-                    disabled={!connected || loading}
+                    disabled={!isWalletReady || loading}
                 >
                     {loading ? (
                         <span className="animate-pulse">Sending...</span>
