@@ -181,6 +181,16 @@ a {
    RESPONSIVE — MOBILE FIRST
    ============================================ */
 
+/* Fade in animation */
+@keyframes fade-in {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out forwards;
+}
+
 @media (max-width: 480px) {
   .wallet-modal-content {
     padding: 20px;

@@ -1,285 +1,496 @@
-import { useState, useEffect, useCallback } from 'react';
+'use client';
+
 import { useWallet } from '@solana/wallet-adapter-react';
-import { Wallet } from '@solana/wallet-adapter-react';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { useCallback, useEffect, useRef, useState, FC, MouseEvent, ReactNode } from 'react';
+import { useWalletStatus } from '../hooks/useWalletStatus';
 
-const WALLET_ICONS: Record<string, string> = {
-    phantom: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSIjQUI5RkYyIiBkPSJNMTIgMGMyLjY2NyAwIDEyIDUuMzMzIDEyIDEycy01LjMzMyAxMi0xMiAxMi0xMi01LjMzMy0xMi0xMnM1LjMzMy0xMiAxMi0xMnptMCAxOGMuNS41NSAxLjI1MSAxLjAwNCAyLjUgMS4wMDRzMS45NzMtLjQ0OSAyLjUtMS4wMDRWM2EuMjY5LS4yNjktLjctLjUtMS4wMDhoLTJ2My41Yy0uMjY5LjI2OS0uNSAuNy0xLjAwOCAxLjAwOC4yNjkuMjY5LjUgLjc1IDEuMDA4IDEuMDA0eiIvPjxzdmcgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxwYXRoIGQ9Ik0xMiA1LjM3NWMtMy42NTUgMC02LjYyNSAyLjk3LTYuNjI1IDYuNjI1IDAgMy42NTUgMi45NyA2LjYyNSA2LjYyNSA2LjYyNSAzLjY1NSAwIDYuNjI1LTIuOTcgNi42MjUtNi42MjUgMC0zLjY1NS0yLjk3LTYuNjI1LTYuNjI1LTYuNjI1em0wIDkuMjV2My41Yy0uMjY5LjI2OS0uNSAuNy0xLjAwOCAxLjAwOC4yNjkuMjY5LjUgLjc1IDEuMDA4IDEuMDA0czEuOTczLS40NDkgMi41LTEuMDA0czEuOTczLjQ0OSAyLjUgMS4wMDR2LTMuNWMtLjI2OS0uMjY5LS41LS43LTEuMDA4LTEuMDA0cy0uNS0uNzUtMS4wMDgtMS4wMDR6Ii8+PC9zdmc+PC9zdmc+',
-    solflare: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSIjMjhBMEY1Ij48cmVjdCB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHJ4PSIyIiBmaWxsPSIjMjhBMEY1Ii8+PHBhdGggZD0iTTE3IDguNXY1SDd2LTVoNC41YzEuNjY3IDAgMi41IDEuODMzIDIuNSA0IDIuNSAxLjE2Ny0xLjEzMyAyLTEuNSAyMGgxLjVWMTVIMTd2LTEuNWMtLjMzMyAxLTEuNSAxLjUtMS41IDVWMTMuNSIvPjwvc3ZnPg==',
-    backpack: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSIjMzMzIiBzdHJrYW9wYWNpdHk9IjAuNiI+PHJlY3Qgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiByeD0iNSIgZmlsbD0iIzAwMERGIi8+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iNSIgZmlsbD0iIzAwMEREIi8+PC9zdmc+',
-    glow: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJ5ZWxsb3ciPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjEwIiBmaWxsPSIjZmY5OTk5Ii8+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iNSIgZmlsbD0iIzAwMCIvPjwvc3ZnPg==',
-};
+// ============================================
+// TYPES
+// ============================================
 
-const DISCONNECT_ICON = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxwYXRoIGQ9Ik0xNiA4TDEzIDVWNkg3djJINXYzdjhoMXYtM2gtMlY1bDMtM0g1djEzaDh2LTRoLTJ2LTRoMnYtMWg0djFoMy41bDMgMy41TDE2IDh6Ii8+PC9zdmc+';
-
-type WalletStatus = 'disconnected' | 'connecting' | 'connected';
+export type WalletStatusType = 'disconnected' | 'connecting' | 'connected';
 
 interface ConnectWalletButtonProps {
-    className?: string;
+  className?: string;
+  size?: number;
+  showAddress?: boolean;
+  onDisconnect?: () => void;
 }
 
-export function ConnectWalletButton({ className = '' }: ConnectWalletButtonProps) {
-    const { connected, connecting, wallet, connect, disconnect } = useWallet();
-    const [status, setStatus] = useState<WalletStatus>('disconnected');
-    const [showModal, setShowModal] = useState(false);
-    const [isHovered, setIsHovered] = useState(false);
-    const [isPressed, setIsPressed] = useState(false);
-    const [ripple, setRipple] = useState(false);
+// ============================================
+// WALLET ICONS — SVG Components (2026 style)
+// ============================================
 
-    // Sync with wallet adapter state
-    useEffect(() => {
-        if (connecting) {
-            setStatus('connecting');
-        } else if (connected) {
-            setStatus('connected');
-            setShowModal(false);
-        } else {
-            setStatus('disconnected');
-        }
-    }, [connecting, connected]);
+const WalletIcon: FC<{ size: number; color?: string }> = ({
+  size,
+  color = 'currentColor',
+}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h13a1 1 0 0 1 1 1v4h-1" />
+    <rect x="1" y="11" width="22" height="11" rx="2" ry="2" />
+    <circle cx="18" cy="16" r="1" />
+  </svg>
+);
 
-    const handleClick = useCallback(() => {
-        if (status === 'connected') {
-            setShowModal((prev) => !prev);
-        } else if (status === 'disconnected') {
-            setShowModal(true);
-        }
-    }, [status]);
+const SpinnerIcon: FC<{ size: number }> = ({ size }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className="animate-spin">
+    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeOpacity="0.2" />
+    <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+  </svg>
+);
 
-    const handleDisconnect = useCallback(async () => {
-        try {
-            await disconnect();
-            setShowModal(false);
-        } catch (err) {
-            console.error('Disconnect failed:', err);
-        }
-    }, [disconnect]);
+const CheckIcon: FC<{ size: number }> = ({ size }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="20 6 9 17 4 12" />
+  </svg>
+);
 
-    const handleModalClose = useCallback(() => {
-        setShowModal(false);
-    }, []);
+const ChevronDownIcon: FC<{ size: number }> = ({ size }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
 
-    const triggerRipple = useCallback(() => {
-        setRipple(true);
-        setTimeout(() => setRipple(false), 600);
-    }, []);
+const DisconnectIcon: FC<{ size: number }> = ({ size }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+    <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+    <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+    <line x1="2" y1="2" x2="22" y2="22" />
+  </svg>
+);
 
-    const getWalletIcon = () => {
-        if (!wallet?.adapter?.name) return null;
-        const name = wallet.adapter.name.toLowerCase();
-        return WALLET_ICONS[name] || null;
-    };
+// ============================================
+// WALLET BRAND ICONS
+// ============================================
 
-    const walletIcon = getWalletIcon();
-    const truncatedAddress = wallet?.adapter?.publicKey
-        ? `${wallet.adapter.publicKey.toBase58().slice(0, 4)}...${wallet.adapter.publicKey.toBase58().slice(-4)}`
-        : '';
+const PhantomIcon: FC<{ size: number }> = ({ size }) => (
+  <svg width={size} height={size} viewBox="0 0 128 128" fill="none">
+    <rect width="128" height="128" rx="32" fill="url(#pg)" />
+    <path d="M103.35 72.19a61.45 61.45 0 0 0-9.38-10.08c8.3-7.94 13.28-19.5 11.51-31.6-3.4-23.23-32.07-33.64-53.32-17.44a35.27 35.27 0 0 0-6.72 5.79c-1.8 1.98-3.44 4.09-4.88 6.33-5.34-2.2-11.25-2.55-16.87-.88-11.62 3.46-18.43 15.44-15.62 27.14 2.37 9.87 10.4 17.12 20.1 18.72a27.37 27.37 0 0 0 9.58-.16c-5.16 5.08-8.27 12.12-8.39 19.78-.11 7.2 2.66 14.01 7.57 19.03 6.9 7.06 17.67 8.82 26.33 4.3a30.4 30.4 0 0 0 6.96-4.85c.54.28 1.1.54 1.68.78 11.61 4.83 24.98.8 32.45-9.84 8.01-11.43 5.75-27.48-4.9-35.02z" fill="white" />
+    <defs><linearGradient id="pg" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse"><stop stopColor="#534BB1" /><stop offset="1" stopColor="#551BF9" /></linearGradient></defs>
+  </svg>
+);
 
-    return (
-        <div className={`relative ${className}`}>
-            {/* Circular Connect Button */}
-            <button
-                onClick={handleClick}
-                onMouseEnter={() => setIsHovered(true)}
-                onMouseLeave={() => setIsHovered(false)}
-                onMouseDown={() => setIsPressed(true)}
-                onMouseUp={() => setIsPressed(false)}
-                onTouchStart={() => setIsPressed(true)}
-                onTouchEnd={() => setIsPressed(false)}
-                className={`
-                    relative w-14 h-14 rounded-full
-                    flex items-center justify-center
-                    transition-all duration-300 ease-out
-                    glass-button
-                    ${isHovered && !connected ? 'scale-110' : ''}
-                    ${isPressed ? 'scale-95' : ''}
-                    ${status === 'connecting' ? 'animate-pulse-glow' : ''}
-                    ${status === 'connected' && walletIcon ? 'connected-wallet' : ''}
-                `}
-                aria-label={status === 'connected' ? 'Wallet connected' : 'Connect wallet'}
-            >
-                {/* Ripple effect */}
-                {ripple && <span className="ripple" />}
+const SolflareIcon: FC<{ size: number }> = ({ size }) => (
+  <svg width={size} height={size} viewBox="0 0 128 128" fill="none">
+    <rect width="128" height="128" rx="32" fill="#1E1E24" />
+    <path d="M72.5 35h-12l-14.5 29h12l-6 12h12l18-36h-12l6-12h-12l14.5 29h12l-6-12h12l18-36h-12l6-12h-12l14.5 29z" fill="url(#sg)" />
+    <defs><linearGradient id="sg" x1="32" y1="35" x2="96" y2="93" gradientUnits="userSpaceOnUse"><stop stopColor="#FF6C2F" /><stop offset="1" stopColor="#FFB347" /></linearGradient></defs>
+  </svg>
+);
 
-                {/* Status content */}
-                <div className="relative z-10 flex items-center justify-center">
-                    {status === 'disconnected' && (
-                        <svg className="w-6 h-6 text-white/90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                        </svg>
-                    )}
+const BackpackIcon: FC<{ size: number }> = ({ size }) => (
+  <svg width={size} height={size} viewBox="0 0 128 128" fill="none">
+    <rect width="128" height="128" rx="32" fill="#5719C0" />
+    <path d="M96 32H32a8 8 0 0 0-8 8v48a8 8 0 0 0 8 8h12v16a8 8 0 0 0 8 8h32a8 8 0 0 0 8-8v-16h12a8 8 0 0 0 8-8V40a8 8 0 0 0-8-8zm-36 68a12 12 0 1 1 12-12 12 12 0 0 1-12 12z" fill="white" />
+  </svg>
+);
 
-                    {status === 'connecting' && (
-                        <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    )}
+// Extensible wallet registry (adapter pattern)
+const WALLET_REGISTRY: Record<string, {
+  name: string;
+  icon: ReactNode;
+  iconName: string;
+  detect: () => boolean;
+}> = {
+  phantom: {
+    name: 'Phantom',
+    iconName: 'phantom',
+    icon: <PhantomIcon size={36} />,
+    detect: () => !!(window as typeof window & { phantom?: { solana?: { isPhantom?: boolean } } }).phantom?.solana?.isPhantom,
+  },
+  solflare: {
+    name: 'Solflare',
+    iconName: 'solflare',
+    icon: <SolflareIcon size={36} />,
+    detect: () => !!(window as typeof window & { solflare?: { isSolflare?: boolean } }).solflare?.isSolflare,
+  },
+  backpack: {
+    name: 'Backpack',
+    iconName: 'backpack',
+    icon: <BackpackIcon size={36} />,
+    detect: () => !!(window as typeof window & { backpack?: { isBackpack?: boolean } }).backpack?.isBackpack,
+  },
+};
 
-                    {status === 'connected' && walletIcon && (
-                        <img src={walletIcon} alt={wallet?.adapter?.name || 'Wallet'} className="w-7 h-7 rounded-full" />
-                    )}
-                </div>
+// ============================================
+// WALLET SELECTION MODAL
+// ============================================
 
-                {/* Outer glow ring when connected */}
-                {status === 'connected' && (
-                    <span className="absolute inset-0 rounded-full animate-pulse-ring" />
-                )}
-            </button>
-
-            {/* Connected address label */}
-            {status === 'connected' && (
-                <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 whitespace-nowrap">
-                    <span className="text-[10px] font-mono text-white/60">{truncatedAddress}</span>
-                </div>
-            )}
-
-            {/* Wallet Selection Modal */}
-            {showModal && (
-                <WalletModal
-                    onClose={handleModalClose}
-                    onDisconnect={handleDisconnect}
-                    isConnected={status === 'connected'}
-                    walletName={wallet?.adapter?.name || ''}
-                />
-            )}
-        </div>
-    );
-}
-
-// Wallet Selection Modal Component
 interface WalletModalProps {
-    onClose: () => void;
-    onDisconnect: () => void;
-    isConnected: boolean;
-    walletName: string;
+  onClose: () => void;
+  onWalletSelect: (walletKey: string) => void;
 }
 
-function WalletModal({ onClose, onDisconnect, isConnected, walletName }: WalletModalProps) {
-    const { wallets, select, connecting } = useWallet();
-    const [selectedWallet, setSelectedWallet] = useState<string | null>(null);
+const WalletModal: FC<WalletModalProps> = ({ onClose, onWalletSelect }) => {
+  const [detectedWallets, setDetectedWallets] = useState<Set<string>>(new Set());
+  const [hoveredWallet, setHoveredWallet] = useState<string | null>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
 
-    // Detect mobile wallet browser
-    const isMobileWalletBrowser = useCallback(() => {
-        if (typeof window === 'undefined') return false;
-        const win = window as any;
-        return !!(win.phantom?.solana?.isPhantom || win.solana?.isPhantom || win.solflare?.isSolflare);
-    }, []);
+  useEffect(() => {
+    const detected = new Set<string>();
+    Object.entries(WALLET_REGISTRY).forEach(([key, config]) => {
+      if (config.detect()) detected.add(key);
+    });
+    setDetectedWallets(detected);
+  }, []);
 
-    const handleWalletSelect = useCallback(async (wallet: Wallet) => {
-        setSelectedWallet(wallet.adapter.name);
-        try {
-            select(wallet.adapter.name);
-            // Modal closes automatically on successful connection via useEffect
-        } catch (err) {
-            console.error('Wallet connection error:', err);
-            setSelectedWallet(null);
-        }
-    }, [select]);
+  // Close on backdrop click
+  const handleBackdropClick = useCallback((e: MouseEvent) => {
+    if (e.target === e.currentTarget) onClose();
+  }, [onClose]);
 
-    // Close on backdrop click
-    const handleBackdropClick = useCallback((e: React.MouseEvent) => {
-        if (e.target === e.currentTarget) {
-            onClose();
-        }
-    }, [onClose]);
-
-    // Close on escape key
-    useEffect(() => {
-        const handleEscape = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') onClose();
-        };
-        window.addEventListener('keydown', handleEscape);
-        return () => window.removeEventListener('keydown', handleEscape);
-    }, [onClose]);
-
-    const getWalletIcon = (wallet: Wallet) => {
-        const name = wallet.adapter.name.toLowerCase();
-        return WALLET_ICONS[name] || null;
+  // Close on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
     };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
-    return (
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-overlay"
-            onClick={handleBackdropClick}
-        >
-            <div className="wallet-modal-content">
-                {/* Modal header */}
-                <div className="flex items-center justify-between mb-6">
-                    <div>
-                        <h3 className="text-lg font-semibold text-white">Connect Wallet</h3>
-                        <p className="text-xs text-white/50 mt-1">Select your preferred wallet</p>
-                    </div>
-                    <button
-                        onClick={onClose}
-                        className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-white/10 transition-colors"
-                    >
-                        <svg className="w-5 h-5 text-white/60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                    </button>
-                </div>
-
-                {/* Wallet list */}
-                <div className="space-y-2">
-                    {wallets.map((wallet) => {
-                        const icon = getWalletIcon(wallet);
-                        const isSelected = selectedWallet === wallet.adapter.name && connecting;
-                        const isThisWallet = wallet.adapter.name === walletName && isConnected;
-
-                        return (
-                            <button
-                                key={wallet.adapter.name}
-                                onClick={() => handleWalletSelect(wallet)}
-                                disabled={connecting}
-                                className={`
-                                    w-full flex items-center gap-3 px-4 py-3
-                                    glass-modal-item
-                                    ${isThisWallet ? 'wallet-connected-item' : ''}
-                                    ${isSelected ? 'opacity-75' : ''}
-                                `}
-                            >
-                                <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center overflow-hidden">
-                                    {icon ? (
-                                        <img src={icon} alt={wallet.adapter.name} className="w-6 h-6" />
-                                    ) : (
-                                        <span className="text-sm font-medium">{wallet.adapter.name[0]}</span>
-                                    )}
-                                </div>
-                                <div className="flex-1 text-left">
-                                    <span className="text-white font-medium">{wallet.adapter.name}</span>
-                                    {isThisWallet && (
-                                        <span className="ml-2 text-[10px] text-green-400 bg-green-400/20 px-2 py-0.5 rounded-full">Connected</span>
-                                    )}
-                                </div>
-                                {isSelected ? (
-                                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                ) : (
-                                    <svg className="w-5 h-5 text-white/30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                    </svg>
-                                )}
-                            </button>
-                        );
-                    })}
-                </div>
-
-                {/* Disconnect option when connected */}
-                {isConnected && (
-                    <div className="mt-6 pt-4 border-t border-white/10">
-                        <button
-                            onClick={onDisconnect}
-                            className="w-full flex items-center justify-center gap-2 px-4 py-3 text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded-lg transition-colors"
-                        >
-                            <img src={DISCONNECT_ICON} alt="Disconnect" className="w-5 h-5" />
-                            <span>Disconnect {walletName}</span>
-                        </button>
-                    </div>
-                )}
-
-                {/* Mobile notice */}
-                {isMobileWalletBrowser() && (
-                    <p className="mt-4 text-xs text-center text-white/40">
-                        In-app browser detected. Connection will open in your wallet app.
-                    </p>
-                )}
-            </div>
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 backdrop-overlay animate-fade-in"
+      onClick={handleBackdropClick}
+    >
+      <div
+        ref={modalRef}
+        className="wallet-modal-content w-full max-w-[380px]"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Select wallet"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Connect Wallet</h2>
+            <p className="text-xs text-white/40 mt-0.5">Choose your preferred wallet</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="w-8 h-8 flex items-center justify-center rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-all duration-200"
+            aria-label="Close"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
         </div>
-    );
+
+        {/* Wallet List */}
+        <div className="space-y-2.5">
+          {Object.entries(WALLET_REGISTRY).map(([key, wallet]) => {
+            const isInstalled = detectedWallets.has(key);
+            const isHovered = hoveredWallet === key;
+
+            return (
+              <button
+                key={key}
+                onClick={() => { onWalletSelect(key); onClose(); }}
+                onMouseEnter={() => setHoveredWallet(key)}
+                onMouseLeave={() => setHoveredWallet(null)}
+                className={`
+                  w-full flex items-center gap-4 p-4 rounded-2xl
+                  glass-modal-item cursor-pointer
+                  transition-all duration-200 ease-out
+                  ${isHovered ? 'bg-white/[0.06] border-white/12 translate-x-1' : ''}
+                `}
+              >
+                <div className="w-11 h-11 rounded-xl bg-white/[0.05] flex items-center justify-center flex-shrink-0">
+                  {wallet.icon}
+                </div>
+                <div className="flex-1 min-w-0 text-left">
+                  <div className="text-white font-medium text-sm">{wallet.name}</div>
+                  <div className="text-white/30 text-xs mt-0.5">
+                    {isInstalled ? 'Detected' : 'Click to connect'}
+                  </div>
+                </div>
+                <div className={`
+                  w-6 h-6 rounded-full border flex items-center justify-center
+                  transition-all duration-200
+                  ${isHovered ? 'border-white/40 bg-white/5' : 'border-white/10'}
+                `}>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/30">
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        <p className="mt-6 text-center text-white/25 text-xs">
+          New to Solana?{' '}
+          <a href="https://solana.com/wallets" target="_blank" rel="noopener noreferrer" className="text-purple-400/50 hover:text-purple-400 transition-colors">
+            Learn more
+          </a>
+        </p>
+      </div>
+    </div>
+  );
+};
+
+// ============================================
+// CONNECTED WALLET DROPDOWN
+// ============================================
+
+interface WalletDropdownProps {
+  onDisconnect: () => void;
+  onClose: () => void;
 }
+
+const WalletDropdown: FC<WalletDropdownProps> = ({ onDisconnect, onClose }) => {
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const { wallet } = useWallet();
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  // Close on backdrop click
+  const handleBackdropClick = useCallback((e: MouseEvent) => {
+    if (e.target === e.currentTarget) onClose();
+  }, [onClose]);
+
+  // Get wallet icon
+  const getWalletIcon = () => {
+    const name = wallet?.adapter?.name?.toLowerCase() || '';
+    if (name.includes('phantom')) return <PhantomIcon size={20} />;
+    if (name.includes('solflare')) return <SolflareIcon size={20} />;
+    if (name.includes('backpack')) return <BackpackIcon size={20} />;
+    return null;
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] backdrop-overlay"
+      onClick={handleBackdropClick}
+    >
+      <div
+        ref={dropdownRef}
+        className="absolute top-full right-0 mt-2 w-56 rounded-2xl p-2 wallet-modal-content"
+      >
+        {/* Connected wallet info */}
+        <div className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.03] mb-2">
+          <div className="w-10 h-10 rounded-xl bg-white/[0.05] flex items-center justify-center">
+            {getWalletIcon()}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-white text-sm font-medium truncate">
+              {wallet?.adapter?.name || 'Wallet'}
+            </div>
+            <div className="text-white/40 text-xs">Connected</div>
+          </div>
+          <div className="w-2 h-2 rounded-full bg-green-400" />
+        </div>
+
+        {/* Disconnect button */}
+        <button
+          onClick={() => { onDisconnect(); onClose(); }}
+          className="w-full flex items-center gap-3 p-3 rounded-xl text-red-400/80 hover:text-red-400 hover:bg-red-400/10 transition-all duration-200 cursor-pointer"
+        >
+          <DisconnectIcon size={18} />
+          <span className="text-sm font-medium">Disconnect</span>
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ============================================
+// CIRCULAR CONNECT WALLET BUTTON
+// ============================================
+
+export const ConnectWalletButton: FC<ConnectWalletButtonProps> = ({
+  className = '',
+  size = 64,
+  showAddress = false,
+  onDisconnect,
+}) => {
+  const { status, connecting, connected, truncatedAddress } = useWalletStatus();
+  const { connect, disconnect } = useWallet();
+  const { setVisible } = useWalletModal();
+  const { wallet } = useWallet();
+
+  const [showModal, setShowModal] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [ripple, setRipple] = useState<{ x: number; y: number } | null>(null);
+  const [isHovered, setIsHovered] = useState(false);
+  const [isPressed, setIsPressed] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  // Handle wallet selection from modal
+  // Delegates to the standard wallet modal (setVisible) for proper adapter handling
+  const handleWalletSelect = useCallback(async (walletKey: string) => {
+    // The standard wallet modal handles the connection flow
+    // This callback can be used for analytics or custom behavior
+    console.log('Wallet selected:', walletKey);
+  }, []);
+
+  // Open modal/dropdown on click
+  const handleClick = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      // Ripple effect
+      const rect = buttonRef.current?.getBoundingClientRect();
+      if (rect) {
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        setRipple({ x, y });
+        setTimeout(() => setRipple(null), 600);
+      }
+
+      if (connected) {
+        setShowDropdown((prev) => !prev);
+      } else if (!connecting) {
+        setVisible(true);
+      }
+    },
+    [connected, connecting, setVisible]
+  );
+
+  // Handle disconnect
+  const handleDisconnect = useCallback(async () => {
+    try {
+      await disconnect();
+      onDisconnect?.();
+      setShowDropdown(false);
+    } catch (err) {
+      console.error('Disconnect failed:', err);
+    }
+  }, [disconnect, onDisconnect]);
+
+  // Derive label
+  const getLabel = () => {
+    if (connected) {
+      return showAddress && truncatedAddress ? truncatedAddress : 'Connected';
+    }
+    if (connecting) return 'Connecting';
+    return 'Connect';
+  };
+
+  // Derive icon
+  const renderIcon = () => {
+    const iconSize = Math.round(size * 0.35);
+
+    if (connecting) return <SpinnerIcon size={iconSize} />;
+    if (connected) return <CheckIcon size={iconSize} />;
+    return <WalletIcon size={iconSize} color="rgba(255,255,255,0.9)" />;
+  };
+
+  // Get glow color based on status
+  const getGlowColor = () => {
+    if (connected) return 'rgba(153, 69, 255, 0.35)';
+    if (connecting) return 'rgba(255, 180, 50, 0.4)';
+    return 'rgba(255, 255, 255, 0.05)';
+  };
+
+  return (
+    <>
+      <div className="flex flex-col items-center">
+        <button
+          ref={buttonRef}
+          onClick={handleClick}
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+          onMouseDown={() => setIsPressed(true)}
+          onMouseUp={() => setIsPressed(false)}
+          className={`
+            relative flex items-center justify-center rounded-full
+            transition-all duration-300 ease-out
+            glass-button cursor-pointer
+            ${isHovered && !connected ? 'scale-110' : ''}
+            ${isPressed ? 'scale-95' : ''}
+            ${connecting ? 'animate-pulse-glow' : ''}
+            ${connected ? 'connected-wallet' : ''}
+          `}
+          style={{
+            width: size,
+            height: size,
+            borderColor: getGlowColor(),
+          }}
+          aria-label={
+            connected ? `Wallet connected: ${truncatedAddress}` :
+            connecting ? 'Connecting wallet...' : 'Connect wallet'
+          }
+        >
+          {/* Pulse ring when connected */}
+          {connected && !isHovered && !isPressed && (
+            <div className="animate-pulse-ring" />
+          )}
+
+          {/* Ripple */}
+          {ripple && (
+            <span
+              className="ripple"
+              style={{
+                left: ripple.x,
+                top: ripple.y,
+              }}
+            />
+          )}
+
+          {/* Icon */}
+          <div className={`
+            flex items-center justify-center z-10
+            transition-colors duration-300
+            ${connected ? 'text-purple-400' : connecting ? 'text-amber-400' : 'text-white/90'}
+          `}>
+            {renderIcon()}
+          </div>
+
+          {/* Status dot */}
+          <div className={`
+            absolute bottom-0.5 right-0.5 w-3 h-3 rounded-full border-2 border-black/50
+            transition-colors duration-300
+            ${connected ? 'bg-green-400' : connecting ? 'bg-amber-400' : 'bg-white/30'}
+          `} />
+
+          {/* Hover glow */}
+          {isHovered && (
+            <div
+              className="absolute inset-0 rounded-full pointer-events-none"
+              style={{
+                boxShadow: `0 0 ${size * 0.5}px ${connected ? 'rgba(153, 69, 255, 0.4)' : 'rgba(255, 255, 255, 0.2)'}`,
+              }}
+            />
+          )}
+        </button>
+
+        {/* Label */}
+        <span className={`
+          mt-2 text-[11px] font-medium tracking-wide
+          transition-colors duration-300
+          ${connected ? 'text-white/60' : 'text-white/40'}
+        `}>
+          {getLabel()}
+        </span>
+      </div>
+
+      {/* Wallet Selection Modal */}
+      {showModal && (
+        <WalletModal
+          onClose={() => setShowModal(false)}
+          onWalletSelect={handleWalletSelect}
+        />
+      )}
+
+      {/* Connected Wallet Dropdown */}
+      {showDropdown && (
+        <WalletDropdown
+          onDisconnect={handleDisconnect}
+          onClose={() => setShowDropdown(false)}
+        />
+      )}
+    </>
+  );
+};
+
+export default ConnectWalletButton;

@@ -1,15 +1,10 @@
 import { FC } from 'react';
 import Link from "next/link";
-import dynamic from 'next/dynamic';
 import React, { useState } from "react";
 import { useAutoConnect } from '../contexts/AutoConnectProvider';
 import NetworkSwitcher from './NetworkSwitcher';
 import NavElement from './nav-element';
-
-const WalletMultiButtonDynamic = dynamic(
-  async () => (await import('@solana/wallet-adapter-react-ui')).WalletMultiButton,
-  { ssr: false }
-);
+import { ConnectWalletButton } from './ConnectWalletButton';
 
 export const AppBar: React.FC = () => {
   const { autoConnect, setAutoConnect } = useAutoConnect();
@@ -47,7 +42,9 @@ export const AppBar: React.FC = () => {
               </svg>
             </Link>
           </div>
-          <WalletMultiButtonDynamic className="btn-ghost btn-sm relative flex md:hidden text-lg " />
+          <div className="md:hidden">
+            <ConnectWalletButton size={52} />
+          </div>
         </div>
 
         {/* Nav Links */}
@@ -64,7 +61,9 @@ export const AppBar: React.FC = () => {
             href="/basics"
             navigationStarts={() => setIsNavOpen(false)}
           />
-          <WalletMultiButtonDynamic className="btn-ghost btn-sm rounded-btn text-lg mr-6 " />
+          <div className="mr-6">
+            <ConnectWalletButton size={56} showAddress />
+          </div>
         </div>
           <label
               htmlFor="my-drawer"
