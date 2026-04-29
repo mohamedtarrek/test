@@ -191,6 +191,27 @@ a {
   animation: fade-in 0.2s ease-out forwards;
 }
 
+/* Shimmer effect for buttons */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.animate-shimmer {
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* Tilt animation for card hover */
+@keyframes tilt {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(0.5deg); }
+  75% { transform: rotate(-0.5deg); }
+}
+
+.animate-tilt {
+  animation: tilt 3s ease-in-out infinite;
+}
+
 @media (max-width: 480px) {
   .wallet-modal-content {
     padding: 20px;
