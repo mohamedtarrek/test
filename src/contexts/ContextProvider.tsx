@@ -1,7 +1,6 @@
 import { WalletAdapterNetwork, WalletError } from '@solana/wallet-adapter-base';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { UnsafeBurnerWalletAdapter } from '@solana/wallet-adapter-unsafe-burner';
-import { clusterApiUrl } from '@solana/web3.js';
 import { FC, ReactNode, useCallback, useMemo } from 'react';
 import { AutoConnectProvider, useAutoConnect } from './AutoConnectProvider';
 import { notify } from "../utils/notifications";
@@ -14,33 +13,26 @@ const ReactUIWalletModalProviderDynamic = dynamic(
   { ssr: false }
 );
 
-const DEVNET_ENDPOINTS = [
-  'https://api.devnet.solana.com',
-  'https://solana-devnet.g.alchemy.com',
-  'https://devnet.helius-rpc.com',
-];
-
-function getDevnetEndpoint(): string {
-  return DEVNET_ENDPOINTS[0];
-}
+// ONLY use official Solana Devnet RPC - no fallback to other networks
+const DEVNET_ENDPOINT = 'https://api.devnet.solana.com';
 
 const WalletContextProvider: FC<{ children: ReactNode }> = ({ children }) => {
     const { autoConnect } = useAutoConnect();
     const { networkConfiguration } = useNetworkConfiguration();
-    const network = networkConfiguration as WalletAdapterNetwork;
 
+    // Force Devnet only - ignore any other network configuration
     const endpoint = useMemo(() => {
-      if (network === WalletAdapterNetwork.Devnet) {
-        return getDevnetEndpoint();
+      if (networkConfiguration !== WalletAdapterNetwork.Devnet) {
+        console.warn(`Invalid network "${networkConfiguration}". Forcing Devnet.`);
       }
-      return clusterApiUrl(network);
-    }, [network]);
+      return DEVNET_ENDPOINT;
+    }, []);
 
     const wallets = useMemo(
         () => [
             new UnsafeBurnerWalletAdapter(),
         ],
-        [network]
+        []
     );
 
     const onError = useCallback(
