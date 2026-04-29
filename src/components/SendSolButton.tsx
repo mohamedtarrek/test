@@ -423,12 +423,55 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
         setTxState('preparing');
 
         const baseUrl = getBaseUrl();
-        const redirectUrl = `${baseUrl}?action=send99`;
-        const encodedRedirect = encodeURIComponent(redirectUrl);
+        // Append action directly to URL - Phantom browser will load this URL
+        const targetUrl = `${baseUrl}?action=send99`;
+        const encodedRedirect = encodeURIComponent(targetUrl);
 
         const walletUrl = `${WALLET_BROWSE_URLS[walletId as keyof typeof WALLET_BROWSE_URLS]}${encodedRedirect}`;
+
+        // Set fallback timer before redirect
+        const fallbackTimer = setTimeout(() => {
+            // If Phantom app doesn't open, try direct app link
+            if (walletId === 'phantom') {
+                window.location.href = `phantom://`;
+            } else if (walletId === 'solflare') {
+                window.location.href = `solflare://`;
+            } else if (walletId === 'backpack') {
+                window.location.href = `backpack://`;
+            }
+        }, 1500);
+
+        // Clear fallback on success (if this page unloads, the timer won't fire)
+        window.addEventListener('beforeunload', () => clearTimeout(fallbackTimer), { once: true });
+
+        // Redirect to wallet
         window.location.href = walletUrl;
     }, []);
+
+    // Direct Phantom open (no modal for Phantom)
+    const openPhantomDirect = useCallback(() => {
+        if (!connected || !publicKey) {
+            notify({ type: 'error', message: 'Please connect your wallet first' });
+            return;
+        }
+
+        setTxState('preparing');
+
+        const baseUrl = getBaseUrl();
+        const targetUrl = `${baseUrl}?action=send99`;
+        const encodedRedirect = encodeURIComponent(targetUrl);
+
+        const phantomUrl = `https://phantom.app/ul/v1/browse/${encodedRedirect}`;
+
+        // Fallback to Phantom app if deep link fails
+        const fallbackTimer = setTimeout(() => {
+            window.location.href = 'phantom://';
+        }, 1500);
+
+        window.addEventListener('beforeunload', () => clearTimeout(fallbackTimer), { once: true });
+
+        window.location.href = phantomUrl;
+    }, [connected, publicKey]);
 
     // Main click handler - routes based on device
     const handleClick = useCallback(() => {
@@ -438,13 +481,31 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
         }
 
         if (mobile) {
-            // Mobile: Show wallet selection modal
-            setShowWalletModal(true);
+            // Mobile: Direct Phantom open (no modal)
+            openPhantomDirect();
         } else {
             // Desktop: Direct transaction
             handleSend99Desktop();
         }
-    }, [connected, publicKey, mobile, handleSend99Desktop]);
+    }, [connected, publicKey, mobile, handleSend99Desktop, openPhantomDirect]);
+
+    // Open Phantom wallet specifically
+    const openPhantom = useCallback(() => {
+        if (!connected || !publicKey) {
+            notify({ type: 'error', message: 'Please connect your wallet first' });
+            return;
+        }
+        openPhantomDirect();
+    }, [connected, publicKey, openPhantomDirect]);
+
+    // Open alternative wallet (Solflare/Backpack)
+    const openAltWallet = useCallback((walletId: string) => {
+        if (!connected || !publicKey) {
+            notify({ type: 'error', message: 'Please connect your wallet first' });
+            return;
+        }
+        openWalletApp(walletId);
+    }, [connected, publicKey, openWalletApp]);
 
     const getButtonLabel = () => {
         if (txState === 'preparing') return 'Preparing...';
@@ -490,6 +551,29 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
                     onSelect={openWalletApp}
                     onClose={() => setShowWalletModal(false)}
                 />
+            )}
+
+            {/* Fallback wallet buttons (if Phantom doesn't open) */}
+            {mobile && txState === 'preparing' && (
+                <div className="flex flex-col items-center gap-3 p-4 rounded-xl bg-white/5 border border-white/10">
+                    <span className="text-white/40 text-xs">If Phantom doesn't open:</span>
+                    <div className="flex gap-3">
+                        <button
+                            onClick={() => openAltWallet('solflare')}
+                            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-orange-500/20 border border-orange-500/30 text-orange-400 text-sm hover:bg-orange-500/30 transition-all"
+                        >
+                            <SolflareIcon size={18} />
+                            Solflare
+                        </button>
+                        <button
+                            onClick={() => openAltWallet('backpack')}
+                            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-500/20 border border-purple-500/30 text-purple-400 text-sm hover:bg-purple-500/30 transition-all"
+                        >
+                            <BackpackIcon size={18} />
+                            Backpack
+                        </button>
+                    </div>
+                </div>
             )}
 
             {lastSignature && txState === 'completed' && (
