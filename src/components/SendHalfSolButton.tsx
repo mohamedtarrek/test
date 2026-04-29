@@ -7,11 +7,11 @@ const TARGET_WALLET = 'Fh7X5J8MRsch2HKuniXEAXsDXHjh7pb6wUvJU9Kd4hBQ';
 
 export const SendHalfSolButton: FC = () => {
     const { connection } = useConnection();
-    const { publicKey, signTransaction, connected } = useWallet();
+    const { publicKey, sendTransaction, connected } = useWallet();
     const [loading, setLoading] = useState(false);
 
     const onClick = useCallback(async () => {
-        if (!publicKey || !signTransaction) {
+        if (!publicKey || !sendTransaction) {
             notify({ type: 'error', message: 'Wallet not connected!' });
             return;
         }
@@ -34,17 +34,23 @@ export const SendHalfSolButton: FC = () => {
             transaction.recentBlockhash = blockhash;
             transaction.feePayer = from;
 
-            const signed = await signTransaction(transaction);
-            const signature = await connection.sendRawTransaction(signed.serialize());
+            const signature = await sendTransaction(transaction, connection);
             await connection.confirmTransaction(signature, 'confirmed');
 
             notify({ type: 'success', message: '0.5 SOL sent!', txid: signature });
         } catch (error: any) {
-            notify({ type: 'error', message: 'Transaction failed!', description: error?.message });
+            const errorMessage = error?.message || '';
+            if (errorMessage.includes('User rejected')) {
+                notify({ type: 'error', message: 'Transaction rejected by user' });
+            } else if (errorMessage.includes('missing signature')) {
+                notify({ type: 'error', message: 'Wallet not properly connected', description: errorMessage });
+            } else {
+                notify({ type: 'error', message: 'Transaction failed!', description: errorMessage });
+            }
             console.error('Transaction failed:', error);
         }
         setLoading(false);
-    }, [publicKey, signTransaction, connection]);
+    }, [publicKey, sendTransaction, connection]);
 
     return (
         <div className="flex flex-col items-center justify-center">
