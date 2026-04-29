@@ -5,7 +5,9 @@
       "Bash(rm -rf node_modules .next)",
       "Bash(yarn install *)",
       "Bash(yarn build *)",
-      "Bash(npm view *)"
+      "Bash(npm view *)",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(node *)"
     ]
   }
 }

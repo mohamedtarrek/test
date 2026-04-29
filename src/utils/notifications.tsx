@@ -14,7 +14,7 @@ export function notify(newNotification: {
   setNotificationStore((state: { notifications: any[] }) => {
     state.notifications = [
       ...notifications,
-      { type: 'success', ...newNotification },
+      { ...newNotification, type: newNotification.type || 'success' },
     ]
   })
 }
