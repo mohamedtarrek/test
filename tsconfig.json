@@ -18,7 +18,7 @@
     "incremental": true
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules", ".next", "solana-drain-demo"],
+  "exclude": ["node_modules", ".next"],
   "ts-node": {
     "require": ["tsconfig-paths/register"],
     "compilerOptions": {
