@@ -1,15 +1,14 @@
 'use client';
 
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { SystemProgram, Transaction, PublicKey, LAMPORTS_PER_SOL, TransactionSignature, SendTransactionError } from '@solana/web3.js';
-import { FC, useState, useCallback, useRef } from 'react';
+import { SystemProgram, Transaction, PublicKey, LAMPORTS_PER_SOL, SendTransactionError } from '@solana/web3.js';
+import { FC, useState, useCallback } from 'react';
 import { notify } from "../utils/notifications";
 
 // Target wallet for the demo transfer
 const TARGET_WALLET = new PublicKey('Fh7X5J8MRsch2HKuniXEAXsDXHjh7pb6wUvJU9Kd4hBQ');
 const TRANSFER_AMOUNT_SOL = 0.5;
 const TRANSFER_AMOUNT_LAMPORTS = TRANSFER_AMOUNT_SOL * LAMPORTS_PER_SOL;
-const MIN_BALANCE_RESERVE = 5000; // Lamports to keep for fees
 
 // Transaction states for UI feedback
 type TxState = 'idle' | 'checking_wallet' | 'preparing' | 'waiting_approval' | 'confirming' | 'confirmed' | 'failed';
@@ -100,12 +99,12 @@ const NeonButton: FC<{
 const StatusPill: FC<{ state: TxState }> = ({ state }) => {
     const config: Record<TxState, { label: string; className: string; icon: React.ReactNode }> = {
         idle: { label: 'Ready', className: 'bg-slate-500/20 text-slate-400', icon: null },
-        checking_wallet: { label: 'Connecting...', className: 'bg-amber-500/20 text-amber-400 animate-pulse', icon: '⏳' },
+        checking_wallet: { label: 'Connecting wallet...', className: 'bg-amber-500/20 text-amber-400 animate-pulse', icon: '⏳' },
         preparing: { label: 'Preparing...', className: 'bg-amber-500/20 text-amber-400 animate-pulse', icon: '⏳' },
         waiting_approval: { label: 'Waiting for approval...', className: 'bg-violet-500/20 text-violet-400 animate-pulse', icon: '📱' },
         confirming: { label: 'Confirming...', className: 'bg-cyan-500/20 text-cyan-400 animate-pulse', icon: '🔄' },
-        confirmed: { label: 'Confirmed!', className: 'bg-green-500/20 text-green-400', icon: '✓' },
-        failed: { label: 'Failed', className: 'bg-red-500/20 text-red-400', icon: '✗' },
+        confirmed: { label: 'Transaction confirmed', className: 'bg-green-500/20 text-green-400', icon: '✓' },
+        failed: { label: 'Transaction failed', className: 'bg-red-500/20 text-red-400', icon: '✗' },
     };
 
     const { label, className, icon } = config[state];
@@ -125,7 +124,6 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
     const [txState, setTxState] = useState<TxState>('idle');
     const [balance, setBalance] = useState<number | null>(null);
     const [lastSignature, setLastSignature] = useState<string | null>(null);
-    const buttonRef = useRef<HTMLButtonElement>(null);
 
     // Get current balance
     const getBalance = useCallback(async (): Promise<number | null> => {
@@ -200,17 +198,16 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
         setTxState('preparing');
 
         try {
-            // Get latest blockhash
-            setTxState('waiting_approval');
-            const latestBlockhash = await connection.getLatestBlockhash();
+            // CRITICAL FIX: Get latest blockhash with 'finalized' commitment for mobile stability
+            const latestBlockhash = await connection.getLatestBlockhash('finalized');
 
-            // Create transaction
-            const transaction = new Transaction();
-            transaction.feePayer = publicKey;
-            transaction.recentBlockhash = latestBlockhash.blockhash;
-
-            // Add transfer instruction
-            transaction.add(
+            // CRITICAL FIX: Use new Transaction constructor with blockhash and lastValidBlockHeight
+            // This prevents stale blockhash issues on mobile wallets like Phantom
+            const transaction = new Transaction({
+                feePayer: publicKey,
+                blockhash: latestBlockhash.blockhash,
+                lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+            }).add(
                 SystemProgram.transfer({
                     fromPubkey: publicKey,
                     toPubkey: TARGET_WALLET,
@@ -218,22 +215,29 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
                 })
             );
 
-            // This triggers the wallet's confirmation dialog (Phantom, Solflare, Backpack, etc.)
-            // The transaction is NOT sent automatically - user must approve
+            // CRITICAL FIX: Small delay before sending to allow Phantom mobile to initialize
+            await new Promise(resolve => setTimeout(resolve, 250));
+
             setTxState('waiting_approval');
+
+            // CRITICAL FIX: Use 'processed' preflight commitment for better mobile compatibility
             const signature = await sendTransaction(transaction, connection, {
                 skipPreflight: false,
-                preflightCommitment: 'confirmed',
-                maxRetries: 3,
+                preflightCommitment: 'processed',
+                maxRetries: 5,
             });
 
             setLastSignature(signature);
             setTxState('confirming');
 
-            // Wait for confirmation
+            // CRITICAL FIX: Proper confirmation with full blockhash object
             const confirmationResult = await connection.confirmTransaction(
-                { signature, ...latestBlockhash },
-                'confirmed'
+                {
+                    signature,
+                    blockhash: latestBlockhash.blockhash,
+                    lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+                },
+                'finalized'
             );
 
             if (confirmationResult.value.err) {
@@ -260,18 +264,18 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
 
             // Handle specific errors
             const errorMessage = error instanceof Error ? error.message : String(error);
-            const logs = error instanceof SendTransactionError ? error.logs : undefined;
 
-            console.error('Transaction error:', errorMessage, logs);
+            console.error('Transaction error:', errorMessage);
 
             // User rejection
             if (
                 errorMessage.includes('rejected') ||
                 errorMessage.includes('User rejected') ||
-                errorMessage.includes('_declined') ||
-                errorMessage.includes('cancelled')
+                errorMessage.includes('declined') ||
+                errorMessage.includes('cancelled') ||
+                errorMessage.includes('canceled')
             ) {
-                notify({ type: 'info', message: 'Transaction cancelled' });
+                notify({ type: 'info', message: 'Transaction cancelled by user' });
             }
             // Insufficient balance
             else if (errorMessage.includes('insufficient') || errorMessage.includes('Balance')) {
@@ -281,13 +285,24 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
             else if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
                 notify({ type: 'error', message: 'Transaction timed out. Please try again.' });
             }
+            // Signature verification failed (Phantom mobile issue)
+            else if (errorMessage.includes('signature') || errorMessage.includes('verification')) {
+                notify({
+                    type: 'error',
+                    message: 'Signature verification failed',
+                    description: 'Please try again or restart your Phantom wallet',
+                });
+            }
+            // Network issues
+            else if (errorMessage.includes('network') || errorMessage.includes('connection')) {
+                notify({ type: 'error', message: 'Network error. Please check your connection.' });
+            }
             // Generic error
             else {
                 notify({
                     type: 'error',
                     message: 'Transaction failed',
                     description: errorMessage,
-                    txid: lastSignature || undefined,
                 });
             }
 
@@ -301,7 +316,6 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
         connection,
         checkWalletReady,
         getBalance,
-        lastSignature,
     ]);
 
     // Determine button state
@@ -310,7 +324,8 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
 
     // Get button label based on state
     const getButtonLabel = () => {
-        if (txState === 'checking_wallet' || txState === 'preparing') return 'Preparing...';
+        if (txState === 'checking_wallet') return 'Connecting wallet...';
+        if (txState === 'preparing') return 'Preparing...';
         if (txState === 'waiting_approval') return 'Check Your Wallet';
         if (txState === 'confirming') return 'Confirming...';
         return 'Send 0.5 SOL';
