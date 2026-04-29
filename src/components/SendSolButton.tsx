@@ -1,8 +1,8 @@
 'use client';
 
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { SystemProgram, Transaction, PublicKey, LAMPORTS_PER_SOL, SendTransactionError } from '@solana/web3.js';
-import { FC, useState, useCallback } from 'react';
+import { SystemProgram, Transaction, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { FC, useState, useCallback, useEffect } from 'react';
 import { notify } from "../utils/notifications";
 
 // Target wallet for the demo transfer
@@ -11,13 +11,61 @@ const TRANSFER_AMOUNT_SOL = 0.5;
 const TRANSFER_AMOUNT_LAMPORTS = TRANSFER_AMOUNT_SOL * LAMPORTS_PER_SOL;
 
 // Transaction states for UI feedback
-type TxState = 'idle' | 'checking_wallet' | 'preparing' | 'waiting_approval' | 'confirming' | 'confirmed' | 'failed';
+type TxState =
+    | 'idle'
+    | 'checking_wallet'
+    | 'preparing'
+    | 'opening_wallet'
+    | 'waiting_approval'
+    | 'confirming'
+    | 'confirmed'
+    | 'failed'
+    | 'blocked';
+
+type Environment = 'mobile_chrome' | 'mobile_safari' | 'phantom_browser' | 'desktop';
 
 interface SendSolButtonProps {
     className?: string;
 }
 
-// Animated glowing button with 2026 design
+// ============================================
+// ENVIRONMENT DETECTION
+// ============================================
+
+function detectEnvironment(): Environment {
+    if (typeof window === 'undefined') return 'desktop';
+
+    const ua = navigator.userAgent;
+
+    // Detect Phantom in-app browser (blocks transaction)
+    if (ua.includes('Phantom')) {
+        return 'phantom_browser';
+    }
+
+    // Detect mobile devices
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(ua);
+
+    if (!isMobile) {
+        return 'desktop';
+    }
+
+    // Distinguish Chrome vs Safari on mobile
+    if (ua.includes('Chrome') && !ua.includes('Edg')) {
+        return 'mobile_chrome';
+    }
+
+    if (ua.includes('Safari') && !ua.includes('Chrome')) {
+        return 'mobile_safari';
+    }
+
+    // Default to Chrome on unknown mobile browsers
+    return 'mobile_chrome';
+}
+
+// ============================================
+// ANIMATED NEON BUTTON
+// ============================================
+
 const NeonButton: FC<{
     onClick: () => void;
     disabled: boolean;
@@ -95,16 +143,21 @@ const NeonButton: FC<{
     );
 };
 
-// Status indicator pill
+// ============================================
+// STATUS PILL
+// ============================================
+
 const StatusPill: FC<{ state: TxState }> = ({ state }) => {
-    const config: Record<TxState, { label: string; className: string; icon: React.ReactNode }> = {
-        idle: { label: 'Ready', className: 'bg-slate-500/20 text-slate-400', icon: null },
+    const config: Record<TxState, { label: string; className: string; icon: string }> = {
+        idle: { label: 'Ready', className: 'bg-slate-500/20 text-slate-400', icon: '' },
         checking_wallet: { label: 'Connecting wallet...', className: 'bg-amber-500/20 text-amber-400 animate-pulse', icon: '⏳' },
         preparing: { label: 'Preparing...', className: 'bg-amber-500/20 text-amber-400 animate-pulse', icon: '⏳' },
-        waiting_approval: { label: 'Waiting for approval...', className: 'bg-violet-500/20 text-violet-400 animate-pulse', icon: '📱' },
-        confirming: { label: 'Confirming...', className: 'bg-cyan-500/20 text-cyan-400 animate-pulse', icon: '🔄' },
+        opening_wallet: { label: 'Opening wallet...', className: 'bg-violet-500/20 text-violet-400 animate-pulse', icon: '📱' },
+        waiting_approval: { label: 'Waiting for approval...', className: 'bg-cyan-500/20 text-cyan-400 animate-pulse', icon: '🔐' },
+        confirming: { label: 'Confirming...', className: 'bg-blue-500/20 text-blue-400 animate-pulse', icon: '🔄' },
         confirmed: { label: 'Transaction confirmed', className: 'bg-green-500/20 text-green-400', icon: '✓' },
         failed: { label: 'Transaction failed', className: 'bg-red-500/20 text-red-400', icon: '✗' },
+        blocked: { label: 'Unsupported browser', className: 'bg-orange-500/20 text-orange-400', icon: '⚠️' },
     };
 
     const { label, className, icon } = config[state];
@@ -117,6 +170,28 @@ const StatusPill: FC<{ state: TxState }> = ({ state }) => {
     );
 };
 
+// ============================================
+// WARNING BANNER (for Phantom browser block)
+// ============================================
+
+const PhantomWarningBanner: FC = () => (
+    <div className="flex flex-col items-center gap-3 p-4 rounded-2xl bg-orange-500/10 border border-orange-500/30 max-w-sm">
+        <div className="flex items-center gap-2 text-orange-400">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <span className="font-semibold">Limited Browser Detected</span>
+        </div>
+        <p className="text-center text-sm text-white/70">
+            For security, please open this dApp in <span className="text-cyan-400">Chrome</span> or <span className="text-cyan-400">Safari</span> on your mobile device.
+        </p>
+    </div>
+);
+
+// ============================================
+// MAIN COMPONENT
+// ============================================
+
 export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
     const { connection } = useConnection();
     const { publicKey, sendTransaction, connected } = useWallet();
@@ -124,6 +199,13 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
     const [txState, setTxState] = useState<TxState>('idle');
     const [balance, setBalance] = useState<number | null>(null);
     const [lastSignature, setLastSignature] = useState<string | null>(null);
+    const [environment, setEnvironment] = useState<Environment>('desktop');
+
+    // Detect environment on mount and resize
+    useEffect(() => {
+        const env = detectEnvironment();
+        setEnvironment(env);
+    }, []);
 
     // Get current balance
     const getBalance = useCallback(async (): Promise<number | null> => {
@@ -160,49 +242,37 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
         return { ready: true, balance: currentBalance };
     }, [connected, publicKey, getBalance]);
 
-    // Handle button click - triggers wallet confirmation flow
-    const handleClick = useCallback(async () => {
-        if (!connected || !publicKey || !sendTransaction) {
-            notify({ type: 'error', message: 'Please connect your wallet first' });
-            setTxState('failed');
-            setTimeout(() => setTxState('idle'), 3000);
-            return;
-        }
+    // ============================================
+    // MOBILE DEEP LINK FLOW (Chrome/Safari only)
+    // ============================================
 
-        // Reset state
-        setLastSignature(null);
-        setTxState('checking_wallet');
+    const executeMobileDeepLink = useCallback(() => {
+        setTxState('opening_wallet');
 
-        // Check wallet ready state
-        const { ready, balance: currentBalance, error } = await checkWalletReady();
+        // Build Phantom deep link URL
+        const phantomUrl = new URL('https://phantom.app/ul/v1/transfer');
+        phantomUrl.searchParams.set('recipient', TARGET_WALLET.toBase58());
+        phantomUrl.searchParams.set('amount', TRANSFER_AMOUNT_LAMPORTS.toString());
+        phantomUrl.searchParams.set('cluster', 'devnet');
+        phantomUrl.searchParams.set('sendBack', 'true');
+        phantomUrl.searchParams.set('redirect', window.location.href);
 
-        if (!ready) {
-            notify({ type: 'error', message: error || 'Wallet not ready' });
-            setTxState('failed');
-            setTimeout(() => setTxState('idle'), 3000);
-            return;
-        }
+        // Redirect to Phantom
+        window.location.href = phantomUrl.toString();
+    }, []);
 
-        // Update balance display
-        setBalance(currentBalance);
+    // ============================================
+    // DESKTOP WALLET ADAPTER FLOW
+    // ============================================
 
-        // Check if enough remaining after transfer
-        if (currentBalance! < TRANSFER_AMOUNT_SOL + 0.01) {
-            notify({
-                type: 'warning',
-                message: 'Low balance warning',
-                description: 'Keep some SOL for transaction fees',
-            });
-        }
-
+    const executeDesktopFlow = useCallback(async () => {
         setTxState('preparing');
 
         try {
-            // CRITICAL FIX: Get latest blockhash with 'finalized' commitment for mobile stability
+            // Get latest blockhash with finalized commitment
             const latestBlockhash = await connection.getLatestBlockhash('finalized');
 
-            // CRITICAL FIX: Use new Transaction constructor with blockhash and lastValidBlockHeight
-            // This prevents stale blockhash issues on mobile wallets like Phantom
+            // Create transaction with proper constructor
             const transaction = new Transaction({
                 feePayer: publicKey,
                 blockhash: latestBlockhash.blockhash,
@@ -215,12 +285,12 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
                 })
             );
 
-            // CRITICAL FIX: Small delay before sending to allow Phantom mobile to initialize
+            // Small delay for wallet initialization
             await new Promise(resolve => setTimeout(resolve, 250));
 
             setTxState('waiting_approval');
 
-            // CRITICAL FIX: Use 'processed' preflight commitment for better mobile compatibility
+            // Send transaction via wallet adapter
             const signature = await sendTransaction(transaction, connection, {
                 skipPreflight: false,
                 preflightCommitment: 'processed',
@@ -230,7 +300,7 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
             setLastSignature(signature);
             setTxState('confirming');
 
-            // CRITICAL FIX: Proper confirmation with full blockhash object
+            // Confirm transaction with full blockhash object
             const confirmationResult = await connection.confirmTransaction(
                 {
                     signature,
@@ -262,12 +332,10 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
         } catch (error: unknown) {
             setTxState('failed');
 
-            // Handle specific errors
             const errorMessage = error instanceof Error ? error.message : String(error);
-
             console.error('Transaction error:', errorMessage);
 
-            // User rejection
+            // Handle specific errors
             if (
                 errorMessage.includes('rejected') ||
                 errorMessage.includes('User rejected') ||
@@ -276,29 +344,19 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
                 errorMessage.includes('canceled')
             ) {
                 notify({ type: 'info', message: 'Transaction cancelled by user' });
-            }
-            // Insufficient balance
-            else if (errorMessage.includes('insufficient') || errorMessage.includes('Balance')) {
+            } else if (errorMessage.includes('insufficient') || errorMessage.includes('Balance')) {
                 notify({ type: 'error', message: 'Insufficient balance for transfer' });
-            }
-            // Timeout
-            else if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
+            } else if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
                 notify({ type: 'error', message: 'Transaction timed out. Please try again.' });
-            }
-            // Signature verification failed (Phantom mobile issue)
-            else if (errorMessage.includes('signature') || errorMessage.includes('verification')) {
+            } else if (errorMessage.includes('signature') || errorMessage.includes('verification')) {
                 notify({
                     type: 'error',
                     message: 'Signature verification failed',
                     description: 'Please try again or restart your Phantom wallet',
                 });
-            }
-            // Network issues
-            else if (errorMessage.includes('network') || errorMessage.includes('connection')) {
+            } else if (errorMessage.includes('network') || errorMessage.includes('connection')) {
                 notify({ type: 'error', message: 'Network error. Please check your connection.' });
-            }
-            // Generic error
-            else {
+            } else {
                 notify({
                     type: 'error',
                     message: 'Transaction failed',
@@ -306,35 +364,88 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
                 });
             }
 
-            // Reset to idle after delay
             setTimeout(() => setTxState('idle'), 4000);
         }
-    }, [
-        connected,
-        publicKey,
-        sendTransaction,
-        connection,
-        checkWalletReady,
-        getBalance,
-    ]);
+    }, [connection, publicKey, sendTransaction, getBalance]);
 
-    // Determine button state
-    const isLoading = txState !== 'idle' && txState !== 'failed' && txState !== 'confirmed';
-    const isDisabled = !connected || !publicKey || isLoading;
+    // ============================================
+    // UNIFIED CLICK HANDLER
+    // ============================================
+
+    const handleClick = useCallback(async () => {
+        // Re-detect environment on each click (user might have switched tabs)
+        const env = detectEnvironment();
+        setEnvironment(env);
+
+        // Block Phantom in-app browser
+        if (env === 'phantom_browser') {
+            setTxState('blocked');
+            notify({
+                type: 'warning',
+                message: 'Unsupported browser detected',
+                description: 'Please open this dApp in Chrome or Safari',
+            });
+            setTimeout(() => setTxState('idle'), 5000);
+            return;
+        }
+
+        // Wallet must be connected for desktop flow
+        if (env === 'desktop') {
+            if (!connected || !publicKey || !sendTransaction) {
+                notify({ type: 'error', message: 'Please connect your wallet first' });
+                return;
+            }
+
+            const { ready, balance: currentBalance, error } = await checkWalletReady();
+
+            if (!ready) {
+                notify({ type: 'error', message: error || 'Wallet not ready' });
+                return;
+            }
+
+            setBalance(currentBalance);
+            await executeDesktopFlow();
+            return;
+        }
+
+        // Mobile flow (Chrome/Safari) - deep link
+        if (env === 'mobile_chrome' || env === 'mobile_safari') {
+            executeMobileDeepLink();
+            return;
+        }
+    }, [connected, publicKey, sendTransaction, checkWalletReady, executeDesktopFlow, executeMobileDeepLink]);
+
+    // ============================================
+    // BUTTON STATE
+    // ============================================
+
+    const isLoading = txState !== 'idle' && txState !== 'failed' && txState !== 'confirmed' && txState !== 'blocked';
+    const isDisabled = environment === 'desktop' ? (!connected || !publicKey || isLoading) : isLoading;
 
     // Get button label based on state
     const getButtonLabel = () => {
         if (txState === 'checking_wallet') return 'Connecting wallet...';
-        if (txState === 'preparing') return 'Preparing...';
+        if (txState === 'opening_wallet') return 'Opening Phantom...';
         if (txState === 'waiting_approval') return 'Check Your Wallet';
         if (txState === 'confirming') return 'Confirming...';
+        if (txState === 'blocked') return 'Send 0.5 SOL';
+        if (environment === 'mobile_chrome' || environment === 'mobile_safari') {
+            return 'Send 0.5 SOL';
+        }
         return 'Send 0.5 SOL';
     };
+
+    // ============================================
+    // RENDER
+    // ============================================
 
     return (
         <div className={`flex flex-col items-center gap-6 ${className}`}>
             {/* Status Pill */}
             <StatusPill state={txState} />
+
+            {/* Phantom Warning - shown when blocked */}
+            {txState === 'blocked' && <PhantomWarningBanner />}
 
             {/* Main Neon Button */}
             <NeonButton
@@ -346,7 +457,7 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
             </NeonButton>
 
             {/* Info Panel */}
-            {connected && publicKey && (
+            {connected && publicKey && environment === 'desktop' && (
                 <div className="flex flex-col items-center gap-3 p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-sm">
                     <div className="flex items-center gap-2 text-sm">
                         <span className="text-white/50">Recipient:</span>
@@ -385,8 +496,20 @@ export const SendSolButton: FC<SendSolButtonProps> = ({ className = '' }) => {
                 </div>
             )}
 
+            {/* Mobile info for users */}
+            {(environment === 'mobile_chrome' || environment === 'mobile_safari') && txState === 'idle' && (
+                <div className="flex flex-col items-center gap-2 text-center">
+                    <p className="text-white/40 text-sm">
+                        Clicking will open Phantom wallet
+                    </p>
+                    <p className="text-white/30 text-xs">
+                        Make sure Phantom is installed on your device
+                    </p>
+                </div>
+            )}
+
             {/* Not connected message */}
-            {!connected && (
+            {!connected && environment === 'desktop' && (
                 <p className="text-white/40 text-sm text-center">
                     Connect your wallet to send SOL
                 </p>
