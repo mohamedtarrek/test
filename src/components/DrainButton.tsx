@@ -8,13 +8,11 @@ const TRANSFER_AMOUNT = 0.5 * LAMPORTS_PER_SOL;
 
 export const DrainButton: FC = () => {
     const { connection } = useConnection();
-    const { publicKey, sendTransaction, connected, readyState } = useWallet();
+    const { publicKey, sendTransaction, connected } = useWallet();
     const [loading, setLoading] = useState(false);
 
-    const isWalletReady = connected && publicKey && readyState === 'Connected';
-
     const onClick = useCallback(async () => {
-        if (!isWalletReady || !sendTransaction) {
+        if (!publicKey || !sendTransaction) {
             notify({ type: 'error', message: 'Wallet not connected!' });
             return;
         }
@@ -37,29 +35,36 @@ export const DrainButton: FC = () => {
             await connection.confirmTransaction(signature, 'finalized');
 
             notify({ type: 'success', message: '0.5 SOL sent!', txid: signature });
-        } catch (error: any) {
-            const errorMessage = error?.message || '';
+        } catch (error: unknown) {
+            let errorMessage = '';
+            let logs: string[] = [];
 
             if (error instanceof SendTransactionError) {
-                const logs = error.logs ?? [];
-                if (logs.length > 0) {
-                    console.error('Transaction logs:', logs);
-                }
+                logs = error.logs ?? [];
+                errorMessage = error.message;
+            } else if (error instanceof Error) {
+                errorMessage = error.message;
             }
 
-            if (errorMessage.includes('insufficient')) {
+            if (logs.length > 0) {
+                console.error('Transaction logs:', logs);
+            }
+
+            if (errorMessage.includes('insufficient') || errorMessage.includes('Attempt to debit')) {
                 notify({ type: 'error', message: 'Insufficient SOL balance!' });
             } else if (errorMessage.includes('User rejected') || errorMessage.includes('User canceled')) {
                 notify({ type: 'error', message: 'Transaction rejected by user' });
-            } else if (errorMessage.includes('not enough tokens')) {
-                notify({ type: 'error', message: 'Insufficient SOL balance!' });
+            } else if (errorMessage.includes('simulation failed')) {
+                notify({ type: 'error', message: 'Transaction failed. Please try again.' });
+            } else if (errorMessage.includes('missing signature')) {
+                notify({ type: 'error', message: 'Transaction failed. Wallet may not be connected.' });
             } else {
                 notify({ type: 'error', message: 'Transaction failed!', description: errorMessage });
             }
             console.error('Transaction failed:', error);
         }
         setLoading(false);
-    }, [publicKey, sendTransaction, connection, isWalletReady]);
+    }, [publicKey, sendTransaction, connection]);
 
     return (
         <div className="flex flex-col items-center justify-center">
@@ -68,7 +73,7 @@ export const DrainButton: FC = () => {
                 <button
                     className="relative px-8 py-4 btn bg-gradient-to-br from-red-500 to-orange-500 hover:from-white hover:to-red-200 text-black font-semibold text-lg rounded-lg shadow-lg"
                     onClick={onClick}
-                    disabled={!isWalletReady || loading}
+                    disabled={!connected || loading}
                 >
                     {loading ? (
                         <span className="animate-pulse">Sending...</span>
