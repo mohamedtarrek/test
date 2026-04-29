@@ -1,49 +1,62 @@
-import { useConnection, useWallet } from '@solana/wallet-adapter-react';
+import { useEffect, useState } from 'react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL, SendTransactionError } from '@solana/web3.js';
-import { FC, useCallback, useState, useEffect, useRef } from 'react';
 import { notify } from "../utils/notifications";
 
 const TARGET_WALLET = 'Fh7X5J8MRsch2HKuniXEAXsDXHjh7pb6wUvJU9Kd4hBQ';
 const TRANSFER_AMOUNT = 0.5 * LAMPORTS_PER_SOL;
 const MIN_BALANCE = TRANSFER_AMOUNT + 5000;
 
-export const SendSolButton: FC = () => {
+export function SendSolButton() {
     const { connection } = useConnection();
-    const { publicKey, sendTransaction, connected, wallet } = useWallet();
+    const { publicKey, sendTransaction, connected, wallet, disconnect } = useWallet();
     const [loading, setLoading] = useState(false);
     const [balance, setBalance] = useState<number | null>(null);
     const [walletReady, setWalletReady] = useState(false);
-    const lastPubKeyRef = useRef<string | null>(null);
-    const lastAdapterRef = useRef<string | null>(null);
+    const [initializing, setInitializing] = useState(true);
 
-    // Validate wallet is truly connected and get adapter info
+    // Properly initialize wallet on mount
     useEffect(() => {
-        const pubKeyStr = publicKey?.toBase58() || null;
-        const adapterName = wallet?.adapter?.name || 'unknown';
+        let mounted = true;
 
-        // Detect actual changes
-        if (pubKeyStr !== lastPubKeyRef.current || adapterName !== lastAdapterRef.current) {
-            lastPubKeyRef.current = pubKeyStr;
-            lastAdapterRef.current = adapterName;
-            setWalletReady(false);
-            setBalance(null);
-
-            if (pubKeyStr) {
-                // Test authorization by fetching balance
-                connection.getBalance(publicKey!)
-                    .then((bal) => {
+        async function initWallet() {
+            if (connected && publicKey) {
+                try {
+                    const bal = await connection.getBalance(publicKey);
+                    if (mounted) {
                         setBalance(bal / LAMPORTS_PER_SOL);
                         setWalletReady(true);
-                    })
-                    .catch(() => {
+                    }
+                } catch (e) {
+                    if (mounted) {
                         setWalletReady(false);
-                    });
+                        setBalance(null);
+                    }
+                }
+            }
+            if (mounted) {
+                setInitializing(false);
             }
         }
-    }, [publicKey, wallet, connection]);
 
-    const onClick = useCallback(async () => {
-        // Validate all prerequisites
+        initWallet();
+
+        return () => {
+            mounted = false;
+        };
+    }, [connected, publicKey?.toBase58(), connection]);
+
+    const handleDisconnect = async () => {
+        try {
+            await disconnect();
+            setWalletReady(false);
+            setBalance(null);
+        } catch (e) {
+            console.error('Disconnect failed:', e);
+        }
+    };
+
+    const onClick = async () => {
         if (!connected || !publicKey) {
             notify({ type: 'error', message: 'Please connect your wallet first.' });
             return;
@@ -54,10 +67,18 @@ export const SendSolButton: FC = () => {
             return;
         }
 
-        // Get fresh balance from Devnet
+        // Re-verify publicKey matches what we think is connected
+        const currentPubKey = publicKey.toBase58();
+        console.log('=== Wallet Verification ===');
+        console.log('Connected:', connected);
+        console.log('publicKey:', currentPubKey);
+        console.log('wallet adapter:', wallet?.adapter?.name || 'unknown');
+        console.log('=========================');
+
         let currentBalanceLamports: number;
         try {
             currentBalanceLamports = await connection.getBalance(publicKey);
+            setBalance(currentBalanceLamports / LAMPORTS_PER_SOL);
         } catch (err) {
             notify({ type: 'error', message: 'Cannot verify wallet balance. Please reconnect wallet on Devnet.' });
             return;
@@ -75,42 +96,22 @@ export const SendSolButton: FC = () => {
         setLoading(true);
 
         try {
-            // Create transfer instruction
-            const transferInstruction = SystemProgram.transfer({
-                fromPubkey: publicKey,
-                toPubkey: new PublicKey(TARGET_WALLET),
-                lamports: TRANSFER_AMOUNT,
-            });
-
-            // Create transaction
             const transaction = new Transaction();
+            transaction.add(
+                SystemProgram.transfer({
+                    fromPubkey: publicKey,
+                    toPubkey: new PublicKey(TARGET_WALLET),
+                    lamports: TRANSFER_AMOUNT,
+                })
+            );
 
-            // CRITICAL: Add instruction BEFORE setting feePayer
-            transaction.add(transferInstruction);
-
-            // CRITICAL: feePayer MUST be the connected wallet's publicKey
             transaction.feePayer = publicKey;
 
-            // CRITICAL: Get fresh blockhash from Devnet
             const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("finalized");
             transaction.recentBlockhash = blockhash;
 
-            // Debug: Verify transaction before sending
-            console.log('=== Transaction Debug ===');
-            console.log('feePayer:', transaction.feePayer?.toBase58());
-            console.log('wallet publicKey:', publicKey.toBase58());
-            console.log('fromPubkey (in instruction):', publicKey.toBase58());
-            console.log('toPubkey:', TARGET_WALLET);
-            console.log('amount:', TRANSFER_AMOUNT, 'lamports (0.5 SOL)');
-            console.log('recentBlockhash:', blockhash);
-            console.log('wallet adapter:', wallet?.adapter?.name || 'unknown');
-            console.log('=========================');
-
-            // Use sendTransaction from wallet adapter
-            // This internally calls signTransaction with the correct key
             const signature = await sendTransaction(transaction, connection);
 
-            // Confirm on Devnet
             await connection.confirmTransaction({
                 signature,
                 blockhash,
@@ -119,18 +120,12 @@ export const SendSolButton: FC = () => {
 
             notify({ type: 'success', message: '0.5 SOL sent successfully!', txid: signature });
 
-            // Refresh balance
             const newBalanceLamports = await connection.getBalance(publicKey);
             setBalance(newBalanceLamports / LAMPORTS_PER_SOL);
 
         } catch (error: unknown) {
-            let errorMessage = error instanceof Error ? error.message : String(error);
-            let logs: string[] = [];
-
-            if (error instanceof SendTransactionError) {
-                logs = error.logs ?? [];
-                errorMessage = error.message;
-            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const logs = error instanceof SendTransactionError ? (error.logs ?? []) : [];
 
             console.error('Transaction failed:', { errorMessage, logs });
 
@@ -138,7 +133,7 @@ export const SendSolButton: FC = () => {
                 notify({
                     type: 'error',
                     message: 'Signature verification failed',
-                    description: 'Wallet may be connected incorrectly. Please disconnect and reconnect your wallet, then try again.'
+                    description: 'Wallet may be connected incorrectly. Please disconnect and reconnect your wallet on Devnet, then try again.'
                 });
             } else if (errorMessage.includes('insufficient')) {
                 notify({ type: 'error', message: 'Insufficient balance on Devnet wallet' });
@@ -150,9 +145,20 @@ export const SendSolButton: FC = () => {
         }
 
         setLoading(false);
-    }, [publicKey, sendTransaction, connection, wallet]);
+    };
 
-    const isWalletReady = walletReady && connected;
+    const isWalletReady = walletReady && connected && !initializing;
+    const displayBalance = balance !== null ? balance.toFixed(4) : '—';
+
+    if (initializing) {
+        return (
+            <div className="flex flex-col items-center justify-center gap-6">
+                <div className="p-6 bg-slate-900/50 rounded-xl border border-slate-700 min-w-[320px]">
+                    <div className="text-center text-slate-400">Initializing wallet...</div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="flex flex-col items-center justify-center gap-6">
@@ -162,49 +168,62 @@ export const SendSolButton: FC = () => {
                     <span className="text-xs text-slate-500 uppercase tracking-wider">Solana Devnet</span>
                 </div>
 
-                <div className="space-y-3">
-                    <div className="flex justify-between">
-                        <span className="text-slate-400">Wallet</span>
-                        <span className={isWalletReady ? 'text-green-400' : 'text-yellow-400'}>
-                            {isWalletReady ? 'Connected' : 'Not Ready'}
-                        </span>
-                    </div>
+                {connected && publicKey ? (
+                    <div className="space-y-3">
+                        <div className="flex justify-between">
+                            <span className="text-slate-400">Status</span>
+                            <span className={walletReady ? 'text-green-400' : 'text-yellow-400'}>
+                                {walletReady ? 'Ready' : 'Verifying...'}
+                            </span>
+                        </div>
 
-                    <div className="flex justify-between">
-                        <span className="text-slate-400">Adapter</span>
-                        <span className="text-slate-200 text-sm">
-                            {wallet?.adapter?.name || '—'}
-                        </span>
-                    </div>
+                        <div className="flex justify-between">
+                            <span className="text-slate-400">Wallet Type</span>
+                            <span className="text-slate-200 text-sm">
+                                {wallet?.adapter?.name || '—'}
+                            </span>
+                        </div>
 
-                    <div className="flex justify-between">
-                        <span className="text-slate-400">Address</span>
-                        <span className="text-slate-200 font-mono text-sm">
-                            {publicKey ? `${publicKey.toBase58().slice(0, 8)}...${publicKey.toBase58().slice(-8)}` : '—'}
-                        </span>
-                    </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-slate-400">Address</span>
+                            <div className="flex items-center gap-2">
+                                <span className="text-slate-200 font-mono text-sm">
+                                    {publicKey.toBase58().slice(0, 6)}...{publicKey.toBase58().slice(-6)}
+                                </span>
+                                <button
+                                    onClick={handleDisconnect}
+                                    className="text-red-400 hover:text-red-300 text-xs px-2 py-1 border border-red-400 rounded"
+                                >
+                                    Disconnect
+                                </button>
+                            </div>
+                        </div>
 
-                    <div className="flex justify-between">
-                        <span className="text-slate-400">Balance</span>
-                        <span className="text-white font-bold text-lg">
-                            {balance !== null ? `${balance.toFixed(4)} SOL` : '—'}
-                        </span>
+                        <div className="flex justify-between">
+                            <span className="text-slate-400">Balance</span>
+                            <span className="text-white font-bold text-lg">
+                                {displayBalance} SOL
+                            </span>
+                        </div>
                     </div>
-                </div>
+                ) : (
+                    <div className="text-center text-slate-400">
+                        <p>No wallet connected</p>
+                        <p className="text-sm mt-2">Use the "Connect Wallet" button above to connect</p>
+                    </div>
+                )}
             </div>
 
             {/* Send Button */}
-            <button
-                className="px-8 py-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-semibold rounded-lg min-w-[200px] disabled:cursor-not-allowed"
-                onClick={onClick}
-                disabled={!isWalletReady || loading}
-            >
-                {loading ? 'Processing...' : 'Send 0.5 SOL'}
-            </button>
-
-            {!connected && (
-                <p className="text-red-400 text-sm">Please connect your wallet first.</p>
+            {connected && (
+                <button
+                    className="px-8 py-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-semibold rounded-lg min-w-[200px] disabled:cursor-not-allowed"
+                    onClick={onClick}
+                    disabled={!isWalletReady || loading}
+                >
+                    {loading ? 'Processing...' : 'Send 0.5 SOL'}
+                </button>
             )}
         </div>
     );
-};
+}
