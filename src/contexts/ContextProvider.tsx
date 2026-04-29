@@ -15,26 +15,45 @@ const ReactUIWalletModalProviderDynamic = dynamic(
   { ssr: false }
 );
 
+// Check if running on mobile iOS
+function isIosDevice(): boolean {
+    if (typeof window === 'undefined') return false;
+    return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+// Get the correct Phantom adapter for the environment
+function getPhantomAdapter(): PhantomWalletAdapter {
+    const adapter = new PhantomWalletAdapter();
+    return adapter;
+}
+
 const WalletContextProvider: FC<{ children: ReactNode }> = ({ children }) => {
     const { autoConnect } = useAutoConnect();
-    const { networkConfiguration } = useNetworkConfiguration();
 
     // Force Devnet only using clusterApiUrl
     const endpoint = useMemo(() => clusterApiUrl(WalletAdapterNetwork.Devnet), []);
 
     // Real wallet adapters - Phantom and Solflare
-    const wallets = useMemo(
-        () => [
-            new PhantomWalletAdapter(),
-            new SolflareWalletAdapter(),
-        ],
-        []
-    );
+    // Only include adapters that are supported in the current environment
+    const wallets = useMemo(() => {
+        const adapters = [];
+
+        // Always add Phantom
+        adapters.push(getPhantomAdapter());
+
+        // Add Solflare
+        adapters.push(new SolflareWalletAdapter());
+
+        return adapters;
+    }, []);
 
     const onError = useCallback(
         (error: WalletError) => {
-            notify({ type: 'error', message: error.message ? `${error.name}: ${error.message}` : error.name });
-            console.error(error);
+            console.error('Wallet error:', error);
+            // Don't show notification for WalletNotReadyError - it's handled gracefully
+            if (error.name !== 'WalletNotReadyError') {
+                notify({ type: 'error', message: error.message || error.name });
+            }
         },
         []
     );
