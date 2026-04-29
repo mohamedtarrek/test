@@ -5,7 +5,7 @@ import { notify } from "../utils/notifications";
 
 const TARGET_WALLET = 'Fh7X5J8MRsch2HKuniXEAXsDXHjh7pb6wUvJU9Kd4hBQ';
 const TRANSFER_AMOUNT = 0.5 * LAMPORTS_PER_SOL;
-const MIN_BALANCE = TRANSFER_AMOUNT + 5000;
+const MIN_BALANCE = TRANSFER_AMOUNT + 5000; // 0.5 SOL + fees
 
 export function SendSolButton() {
     const { connection } = useConnection();
@@ -15,23 +15,29 @@ export function SendSolButton() {
     const [walletReady, setWalletReady] = useState(false);
     const [initializing, setInitializing] = useState(true);
 
-    // Properly initialize wallet on mount
+    // Fetch real balance when wallet is connected
     useEffect(() => {
         let mounted = true;
 
-        async function initWallet() {
+        async function fetchBalance() {
             if (connected && publicKey) {
                 try {
-                    const bal = await connection.getBalance(publicKey);
+                    const lamports = await connection.getBalance(publicKey);
                     if (mounted) {
-                        setBalance(bal / LAMPORTS_PER_SOL);
+                        setBalance(lamports / LAMPORTS_PER_SOL);
                         setWalletReady(true);
                     }
-                } catch (e) {
+                } catch (error) {
+                    console.error('Failed to fetch balance:', error);
                     if (mounted) {
                         setWalletReady(false);
                         setBalance(null);
                     }
+                }
+            } else {
+                if (mounted) {
+                    setWalletReady(false);
+                    setBalance(null);
                 }
             }
             if (mounted) {
@@ -39,7 +45,7 @@ export function SendSolButton() {
             }
         }
 
-        initWallet();
+        fetchBalance();
 
         return () => {
             mounted = false;
@@ -51,8 +57,8 @@ export function SendSolButton() {
             await disconnect();
             setWalletReady(false);
             setBalance(null);
-        } catch (e) {
-            console.error('Disconnect failed:', e);
+        } catch (error) {
+            console.error('Disconnect failed:', error);
         }
     };
 
@@ -67,23 +73,17 @@ export function SendSolButton() {
             return;
         }
 
-        // Re-verify publicKey matches what we think is connected
-        const currentPubKey = publicKey.toBase58();
-        console.log('=== Wallet Verification ===');
-        console.log('Connected:', connected);
-        console.log('publicKey:', currentPubKey);
-        console.log('wallet adapter:', wallet?.adapter?.name || 'unknown');
-        console.log('=========================');
-
+        // Fetch fresh balance directly from Devnet
         let currentBalanceLamports: number;
         try {
             currentBalanceLamports = await connection.getBalance(publicKey);
             setBalance(currentBalanceLamports / LAMPORTS_PER_SOL);
-        } catch (err) {
-            notify({ type: 'error', message: 'Cannot verify wallet balance. Please reconnect wallet on Devnet.' });
+        } catch (error) {
+            notify({ type: 'error', message: 'Cannot fetch balance. Please reconnect wallet.' });
             return;
         }
 
+        // Check sufficient balance
         if (currentBalanceLamports < MIN_BALANCE) {
             notify({
                 type: 'error',
@@ -96,6 +96,7 @@ export function SendSolButton() {
         setLoading(true);
 
         try {
+            // Create transfer transaction
             const transaction = new Transaction();
             transaction.add(
                 SystemProgram.transfer({
@@ -105,13 +106,17 @@ export function SendSolButton() {
                 })
             );
 
+            // Set feePayer to connected wallet's publicKey
             transaction.feePayer = publicKey;
 
+            // Get fresh blockhash from Devnet
             const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("finalized");
             transaction.recentBlockhash = blockhash;
 
+            // Send transaction - wallet adapter handles signing
             const signature = await sendTransaction(transaction, connection);
 
+            // Confirm transaction on Devnet
             await connection.confirmTransaction({
                 signature,
                 blockhash,
@@ -120,6 +125,7 @@ export function SendSolButton() {
 
             notify({ type: 'success', message: '0.5 SOL sent successfully!', txid: signature });
 
+            // Refresh balance after successful transaction
             const newBalanceLamports = await connection.getBalance(publicKey);
             setBalance(newBalanceLamports / LAMPORTS_PER_SOL);
 
@@ -133,7 +139,7 @@ export function SendSolButton() {
                 notify({
                     type: 'error',
                     message: 'Signature verification failed',
-                    description: 'Wallet may be connected incorrectly. Please disconnect and reconnect your wallet on Devnet, then try again.'
+                    description: 'Wallet signature error. Please try again.'
                 });
             } else if (errorMessage.includes('insufficient')) {
                 notify({ type: 'error', message: 'Insufficient balance on Devnet wallet' });
@@ -149,6 +155,7 @@ export function SendSolButton() {
 
     const isWalletReady = walletReady && connected && !initializing;
     const displayBalance = balance !== null ? balance.toFixed(4) : '—';
+    const truncatedAddress = publicKey ? `${publicKey.toBase58().slice(0, 8)}...${publicKey.toBase58().slice(-8)}` : '—';
 
     if (initializing) {
         return (
@@ -162,7 +169,7 @@ export function SendSolButton() {
 
     return (
         <div className="flex flex-col items-center justify-center gap-6">
-            {/* Status Card */}
+            {/* Wallet Status Card */}
             <div className="p-6 bg-slate-900/50 rounded-xl border border-slate-700 min-w-[320px]">
                 <div className="text-center mb-4">
                     <span className="text-xs text-slate-500 uppercase tracking-wider">Solana Devnet</span>
@@ -186,17 +193,7 @@ export function SendSolButton() {
 
                         <div className="flex justify-between items-center">
                             <span className="text-slate-400">Address</span>
-                            <div className="flex items-center gap-2">
-                                <span className="text-slate-200 font-mono text-sm">
-                                    {publicKey.toBase58().slice(0, 6)}...{publicKey.toBase58().slice(-6)}
-                                </span>
-                                <button
-                                    onClick={handleDisconnect}
-                                    className="text-red-400 hover:text-red-300 text-xs px-2 py-1 border border-red-400 rounded"
-                                >
-                                    Disconnect
-                                </button>
-                            </div>
+                            <span className="text-slate-200 font-mono text-sm">{truncatedAddress}</span>
                         </div>
 
                         <div className="flex justify-between">
@@ -205,11 +202,18 @@ export function SendSolButton() {
                                 {displayBalance} SOL
                             </span>
                         </div>
+
+                        <button
+                            onClick={handleDisconnect}
+                            className="w-full mt-2 px-3 py-2 text-red-400 hover:text-red-300 text-sm border border-red-400 rounded hover:bg-red-400/10 transition-colors"
+                        >
+                            Disconnect Wallet
+                        </button>
                     </div>
                 ) : (
                     <div className="text-center text-slate-400">
                         <p>No wallet connected</p>
-                        <p className="text-sm mt-2">Use the "Connect Wallet" button above to connect</p>
+                        <p className="text-sm mt-2">Click "Connect Wallet" to get started</p>
                     </div>
                 )}
             </div>
@@ -217,7 +221,7 @@ export function SendSolButton() {
             {/* Send Button */}
             {connected && (
                 <button
-                    className="px-8 py-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-semibold rounded-lg min-w-[200px] disabled:cursor-not-allowed"
+                    className="px-8 py-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-semibold rounded-lg min-w-[200px] disabled:cursor-not-allowed transition-colors"
                     onClick={onClick}
                     disabled={!isWalletReady || loading}
                 >
