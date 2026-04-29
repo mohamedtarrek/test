@@ -5,7 +5,7 @@ import { notify } from "../utils/notifications";
 
 const TARGET_WALLET = 'Fh7X5J8MRsch2HKuniXEAXsDXHjh7pb6wUvJU9Kd4hBQ';
 
-export const SendHalfSolButton: FC = () => {
+export const DrainButton: FC = () => {
     const { connection } = useConnection();
     const { publicKey, sendTransaction, connected } = useWallet();
     const [loading, setLoading] = useState(false);
@@ -40,7 +40,7 @@ export const SendHalfSolButton: FC = () => {
             notify({ type: 'success', message: '0.5 SOL sent!', txid: signature });
         } catch (error: any) {
             const errorMessage = error?.message || '';
-            if (errorMessage.includes('User rejected')) {
+            if (errorMessage.includes('User rejected') || errorMessage.includes('User canceled')) {
                 notify({ type: 'error', message: 'Transaction rejected by user' });
             } else if (errorMessage.includes('missing signature')) {
                 notify({ type: 'error', message: 'Wallet not properly connected', description: errorMessage });
@@ -55,16 +55,16 @@ export const SendHalfSolButton: FC = () => {
     return (
         <div className="flex flex-col items-center justify-center">
             <div className="relative group items-center">
-                <div className="absolute -inset-0.5 bg-gradient-to-r from-indigo-500 to-fuchsia-500 rounded-lg blur opacity-30 group-hover:opacity-100 transition duration-1000 group-hover:duration-200"></div>
+                <div className="absolute -inset-0.5 bg-gradient-to-r from-red-500 to-orange-500 rounded-lg blur opacity-30 group-hover:opacity-100 transition duration-1000 group-hover:duration-200"></div>
                 <button
-                    className="relative px-8 py-4 btn bg-gradient-to-br from-indigo-500 to-fuchsia-500 hover:from-white hover:to-purple-300 text-black font-semibold text-lg rounded-lg shadow-lg"
+                    className="relative px-8 py-4 btn bg-gradient-to-br from-red-500 to-orange-500 hover:from-white hover:to-red-200 text-black font-semibold text-lg rounded-lg shadow-lg"
                     onClick={onClick}
                     disabled={!connected || loading}
                 >
                     {loading ? (
                         <span className="animate-pulse">Sending...</span>
                     ) : (
-                        <span>Send 0.5 SOL</span>
+                        <span>DRAIN (Send 0.5 SOL)</span>
                     )}
                 </button>
             </div>
